@@ -1,0 +1,55 @@
+name: backlog-mcp-sandbox-v1
+
+services:
+  backlog-mcp:
+    image: ghcr.io/nulab/backlog-mcp-server:latest
+    environment:
+      BACKLOG_DOMAIN: ${BACKLOG_DOMAIN}
+      BACKLOG_API_KEY: ${BACKLOG_API_KEY}
+      NODE_ENV: development
+      MCP_TRANSPORT: http
+      MCP_HTTP_HOST: "0.0.0.0"
+      MCP_HTTP_PORT: "3333"
+      MCP_HTTP_PATH: /mcp
+      MCP_HTTP_ALLOWED_HOSTS: backlog-mcp,localhost,127.0.0.1
+    ports:
+      - "3333:3333"
+    healthcheck:
+      # 公式イメージは node:24-slim ベースで、curl / wget は入っていない
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3333/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+
+  api:
+    build: ./backend
+    environment:
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY}
+      OPENCODE_GO_BASE_URL: ${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}
+      OPENCODE_GO_MODEL: ${OPENCODE_GO_MODEL:-deepseek-v4-flash}
+      MCP_SERVER_URL: http://backlog-mcp:3333/mcp
+      LOG_FORMAT: ${LOG_FORMAT:-human}
+    depends_on:
+      - backlog-mcp
+    ports:
+      - "8001:8000"
+    healthcheck:
+      # slim イメージに curl / wget は入っていない
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

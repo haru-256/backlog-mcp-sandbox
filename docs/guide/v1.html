@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>v1 学習書: ステートレスな Backlog MCP Host</title>
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css"
+        integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="./assets/guide.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="inner">
+      <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
+      <h1>v1 学習書<br />ステートレスな Backlog MCP Host</h1>
+      <p class="lede">
+        tool loop を CLI で書き、同じ関数を FastAPI で包み、薄い React 画面から確かめる。
+        会話はサーバーに残さない。残らないからこそ、messages がプロトコルであることがはっきりする。
+      </p>
+      <nav class="series" aria-label="この教材の構成">
+        <a href="./index.html">共通の地図</a>
+        <a href="./v1.html" aria-current="page">v1 ステートレス Host</a>
+        <a href="./v2.html">v2 セッションと SSE</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="目次">
+      <strong>目次</strong>
+      <ol>
+        <li><span class="kind">OVERVIEW</span> <a href="#what">v1 で達成すること</a></li>
+        <li><span class="kind">STEP 1</span> <a href="#compose">Backlog MCP を常駐させる</a></li>
+        <li><span class="kind">STEP 2</span> <a href="#loop">tool loop を書く</a></li>
+        <li><span class="kind">STEP 3</span> <a href="#api">同じ loop を FastAPI で包む</a></li>
+        <li><span class="kind">STEP 4</span> <a href="#frontend">検証用フロント</a></li>
+        <li><span class="kind">WRAP UP</span> <a href="#end">到達点を確かめる</a></li>
+      </ol>
+    </nav>
+
+    <div class="note">
+      <strong>先に <a href="./index.html">共通の地図</a> を読む</strong>
+      tool loop の不変条件、二種類のセッション、Backlog MCP を HTTP で常駐させる理由、
+      環境と秘密情報の扱いは共通の地図に置いてある。この文書はそれを前提に、
+      v1 でしか意味を持たない手順だけを扱う。
+    </div>
+
+    <span class="label">OVERVIEW</span>
+    <h2 id="what">v1 で達成すること</h2>
+    <p>
+      v1 の成果物は、messages を受け取って最終回答を返す同期の Chat API である。
+      会話の履歴はサーバーに残さない。クライアントが毎回すべての messages を送り、
+      サーバーは loop 後の messages を返す。この制約が v1 の教材としての価値そのものになる。
+      履歴を預かってくれる相手がいないので、tool 行を含む配列を自分で運ぶしかなくなり、
+      messages が表示用データではなくプロトコルであることを、実装として体験できる。
+    </p>
+    <table>
+      <thead>
+        <tr><th>項目</th><th>完成時の状態</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>サービス</td><td><code>cd v1 &amp;&amp; docker compose up</code> で <code>backlog-mcp</code> と <code>chat-v1</code> が起動する</td></tr>
+        <tr><td>MCP</td><td>Host を書く前に <code>initialize</code> と <code>list_tools</code> のスモークが通る</td></tr>
+        <tr><td>loop</td><td>CLI と HTTP API が同じ <code>run_tool_loop</code> を呼ぶ</td></tr>
+        <tr><td>テスト</td><td>実 LLM と実 MCP なしで、loop の不変条件が検証されている</td></tr>
+        <tr><td>Chat API</td><td><code>POST /chat</code> が最終 assistant と全 messages を同期 JSON で返す</td></tr>
+        <tr><td>履歴</td><td>クライアントが毎回全 messages を送る。サーバーは保存しない</td></tr>
+        <tr><td>観測</td><td>loguru とアクセスログ middleware があり、<code>LOG_FORMAT</code> を切り替えられる</td></tr>
+        <tr><td>確認画面</td><td><code>v1/frontend</code> から同期 Chat を試せる</td></tr>
+      </tbody>
+    </table>
+
+    <h3>API</h3>
+    <table>
+      <thead>
+        <tr><th>メソッド</th><th>パス</th><th>意味</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>POST</code></td><td><code>/chat</code></td><td>受け取った messages で loop を回し、同期 JSON を返す</td></tr>
+        <tr><td><code>GET</code></td><td><code>/health</code></td><td>プロセスが応答できることを示す</td></tr>
+      </tbody>
+    </table>
+
+    <h3>v1 に入れないもの</h3>
+    <p>
+      DB、Chat セッション、SSE、認証、監査ログ、厳密な <code>error.code</code> と timeout の契約は入れない。
+      どれも v2 で扱う。省いたものは未完成の印ではなく、一つの loop を正しく読むための余白である。
+    </p>
+
+    <h3>置き場</h3>
+    <pre><code class="language-plaintext">v1/
+├── compose.yaml   # backlog-mcp + chat-v1（v1 専用）
+├── backend/       # loop、CLI、FastAPI
+└── frontend/      # 検証用 React。Compose には載せない</code></pre>
+    <p>
+      v1 は独立したアプリケーションである。Compose は <code>v1/compose.yaml</code> に置き、
+      リポジトリ直下の共通 Compose には依存しない。起動は版ディレクトリで行う。
+    </p>
+
+    <span class="label">STEP 1</span>
+    <h2 id="compose">Backlog MCP を常駐させる</h2>
+    <p>
+      Host を書く前に、Backlog を操作する MCP を単独で動かす。
+      <code>backlog-mcp</code> サービスの定義とスモークの手順は
+      <a href="./index.html#mcp-service">共通の地図</a> にある。v1 の <code>compose.yaml</code> は次になる。
+    </p>
+    <pre><code class="language-yaml">name: backlog-mcp-sandbox-v1
+
+services:
+  backlog-mcp:
+    image: ghcr.io/nulab/backlog-mcp-server:latest
+    environment:
+      BACKLOG_DOMAIN: ${BACKLOG_DOMAIN}
+      BACKLOG_API_KEY: ${BACKLOG_API_KEY}
+      NODE_ENV: development
+      MCP_TRANSPORT: http
+      MCP_HTTP_HOST: "0.0.0.0"
+      MCP_HTTP_PORT: "3333"
+      MCP_HTTP_PATH: /mcp
+      MCP_HTTP_ALLOWED_HOSTS: backlog-mcp,localhost,127.0.0.1
+    ports:
+      - "3333:3333"</code></pre>
+    <p>
+      <code>chat-v1</code> は STEP 3 で足す。この時点では MCP だけでよい。
+      backend のパッケージも作っておく。パッケージ名は <code>chat</code> とし、
+      <code>v1/backend/src/chat/</code> に置く。v1 と v2 は別アプリなので、同じ名前で衝突しない。
+    </p>
+    <pre><code class="language-toml">[project]
+name = "chat"
+version = "0.1.0"
+requires-python = "&gt;=3.12"
+dependencies = [
+  "loguru&gt;=0.7.3,&lt;0.7.4",
+  "mcp&gt;=2.0.0,&lt;2.1.0",
+  "openai&gt;=2.53.0,&lt;2.54.0",
+  "pydantic-settings&gt;=2.15.0,&lt;2.16.0",
+]
+
+[project.scripts]
+chat = "chat.cli:main"
+
+[build-system]
+requires = ["uv_build&gt;=0.12.2,&lt;0.13.0"]
+build-backend = "uv_build"</code></pre>
+    <div class="check">
+      <strong>STEP 1 の合格線</strong>
+      <code>list_tools</code> が公式 Backlog tool の名前を一つ以上返す。
+      Host のコードをまだ書いていない状態で、HTTP MCP が独立して使える。
+    </div>
+
+    <span class="label">STEP 2</span>
+    <h2 id="loop">tool loop を書く</h2>
+    <p>
+      次に作るのは Web アプリではない。一つの発話を受け、LLM と MCP を最終回答まで往復させる関数である。
+      これが v1 の中心であり、この教材で唯一、ガイドが答えを渡さない部分になる。
+    </p>
+
+    <h3>境界を先に決める</h3>
+    <p>
+      loop を書き始める前に、loop が何を知らないでよいかを決める。
+      公式 SDK の型を loop の中で直接触ると、テストのたびに実 MCP と実 LLM が必要になり、
+      不変条件だけを確かめることができなくなる。そこで SDK を扱う層を二つ用意し、
+      loop からは次の二つの操作しか見えないようにする。
+    </p>
+    <pre><code class="language-python"># src/chat/agent.py
+from typing import Any, Protocol
+
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolParam,
+)
+
+
+class LlmCaller(Protocol):
+    """messages と tools を渡すと、assistant 行を 1 つ返す。"""
+
+    async def complete(
+        self,
+        messages: list[ChatCompletionMessageParam],
+        tools: list[ChatCompletionToolParam],
+    ) -&gt; ChatCompletionAssistantMessageParam: ...
+
+
+class McpCaller(Protocol):
+    """OpenAI 形式の tools を返し、tool の結果を文字列で返す。"""
+
+    async def list_tools(self) -&gt; list[ChatCompletionToolParam]: ...
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -&gt; str: ...</code></pre>
+    <p>
+      この境界には副産物がある。MCP 接続をいつ開いていつ閉じるかという問題が、
+      loop の外へ出る。接続の寿命を決める関数と、会話を進める関数が別になる。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart LR
+  A["run_agent<br/>接続の寿命を決める"] --> B["run_tool_loop<br/>会話を進める"]
+  B --> C["LlmCaller"]
+  B --> D["McpCaller"]
+  C -.-> E["openai SDK"]
+  D -.-> F["mcp SDK"]
+      </div>
+    </div>
+
+    <h3>SDK を捌く層（全文を渡す）</h3>
+    <p>
+      ここから先の三つのファイルは、SDK の型を必要な形へ写すだけの雑務である。
+      詰まっても学ぶものがないので全文を渡す。ただし一箇所だけ、後で効く注意がある。
+      <strong><code>mcp</code> 2.x のフィールドは snake_case である。</strong>
+      古い記事にある <code>inputSchema</code> や <code>structuredContent</code> は、この版では通らない。
+    </p>
+    <pre><code class="language-python"># src/chat/settings.py
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore")
+
+    opencode_go_api_key: str
+    opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
+    opencode_go_model: str = "deepseek-v4-flash"
+    mcp_server_url: str = "http://127.0.0.1:3333/mcp"
+    log_format: str = "human"
+    max_tool_calls: int = 10</code></pre>
+    <pre><code class="language-python"># src/chat/mcp_client.py
+import json
+from typing import Any
+
+from mcp import ClientSession
+from mcp.types import TextContent
+from openai.types.chat import ChatCompletionToolParam
+
+
+class BacklogMcp:
+    """ClientSession を、loop が使う 2 つの操作だけに絞る。
+
+    mcp SDK の型を扱うのはこのクラスの中だけにする。
+    loop 側は OpenAI 形式の tools と、文字列の結果しか知らない。
+    """
+
+    def __init__(self, session: ClientSession) -&gt; None:
+        self._session: ClientSession = session
+
+    async def list_tools(self) -&gt; list[ChatCompletionToolParam]:
+        listed = await self._session.list_tools()
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "parameters": tool.input_schema,
+                },
+            }
+            for tool in listed.tools
+        ]
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -&gt; str:
+        result = await self._session.call_tool(name, arguments)
+
+        if result.structured_content is not None:
+            text = json.dumps(result.structured_content, ensure_ascii=False)
+        else:
+            blocks = [
+                b.text for b in result.content if isinstance(b, TextContent)
+            ]
+            text = "\n".join(blocks) if blocks else "(tool は内容を返さなかった)"
+
+        # tool 自身のエラーは例外にしない。LLM に見せて自己修正させるのが MCP の設計である。
+        # 例外にしてよいのは、tool が見つからない等のプロトコル階層の失敗だけ。
+        if result.is_error:
+            return f"tool error: {text}"
+        return text</code></pre>
+    <pre><code class="language-python"># src/chat/llm.py
+from openai import AsyncOpenAI
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessage,
+    ChatCompletionMessageFunctionToolCall,
+    ChatCompletionMessageFunctionToolCallParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolParam,
+)
+
+from chat.settings import Settings
+
+
+class OpenCodeGoLlm:
+    """OpenAI 互換の Chat Completions を、loop が使う 1 つの操作だけに絞る。"""
+
+    def __init__(self, settings: Settings) -&gt; None:
+        self._client: AsyncOpenAI = AsyncOpenAI(
+            api_key=settings.opencode_go_api_key,
+            base_url=settings.opencode_go_base_url,
+        )
+        self._model: str = settings.opencode_go_model
+
+    async def complete(
+        self,
+        messages: list[ChatCompletionMessageParam],
+        tools: list[ChatCompletionToolParam],
+    ) -&gt; ChatCompletionAssistantMessageParam:
+        completion = await self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            tools=tools,
+        )
+        return _to_row(completion.choices[0].message)
+
+
+def _to_row(message: ChatCompletionMessage) -&gt; ChatCompletionAssistantMessageParam:
+    """SDK のモデルを、そのまま次の呼び出しへ渡せる dict にする。
+
+    model_dump() をそのまま使わない。refusal や audio のような None の項目が混ざり、
+    互換 API 側で弾かれることがある。必要な項目だけを写す。
+    """
+    row: ChatCompletionAssistantMessageParam = {
+        "role": "assistant",
+        "content": message.content,
+    }
+    if message.tool_calls:
+        tool_calls: list[ChatCompletionMessageFunctionToolCallParam] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.function.name,
+                    # arguments は JSON 文字列のまま渡す。ここで dict にすると、
+                    # 次の呼び出しで二重にエンコードされる
+                    "arguments": call.function.arguments,
+                },
+            }
+            for call in message.tool_calls
+            if isinstance(call, ChatCompletionMessageFunctionToolCall)
+        ]
+        if tool_calls:
+            row["tool_calls"] = tool_calls
+    return row</code></pre>
+
+    <h3>接続の寿命を決める層（全文を渡す）</h3>
+    <p>
+      <code>ClientSession</code> は loop の外側で開き、最終回答が出るまで維持する。
+      その位置がコードとして見えるのが、この関数の役目である。
+    </p>
+    <pre><code class="language-python"># src/chat/agent.py（つづき）
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+from chat.llm import OpenCodeGoLlm
+from chat.mcp_client import BacklogMcp
+from chat.settings import Settings
+
+
+async def run_agent(
+    messages: list[ChatCompletionMessageParam],
+    settings: Settings,
+) -&gt; list[ChatCompletionMessageParam]:
+    """接続を開き、loop を一度回す。
+
+    接続の寿命を決めるのがこの関数の仕事で、会話を進めるのは run_tool_loop である。
+    分けておくと、loop を実 MCP なしでテストできる。
+    """
+    llm = OpenCodeGoLlm(settings)
+    async with streamable_http_client(settings.mcp_server_url) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await run_tool_loop(
+                messages,
+                llm=llm,
+                mcp=BacklogMcp(session),
+                max_tool_calls=settings.max_tool_calls,
+            )</code></pre>
+
+    <h3>loop 本体</h3>
+    <div class="task">
+      <strong>ここはあなたが書く</strong>
+      ガイドが渡すのは、シグネチャと不変条件と、通すべきテストだけである。
+      この関数を写経で通過すると、v1 の目的は達成されない。
+      詰まったときは <a href="./index.html#loop">共通の地図の tool loop の原理</a> に戻る。
+    </div>
+    <pre><code class="language-python"># src/chat/agent.py（つづき）
+import json
+
+
+class ToolCallLimitExceeded(RuntimeError):
+    """tool の実行回数が上限に達した。"""
+
+
+async def run_tool_loop(
+    messages: list[ChatCompletionMessageParam],
+    *,
+    llm: LlmCaller,
+    mcp: McpCaller,
+    max_tool_calls: int = 10,
+) -&gt; list[ChatCompletionMessageParam]:
+    """LLM が tool を要求しなくなるまで往復し、更新した messages を返す。
+
+    不変条件:
+      - LLM が返した assistant 行は、tool を実行する前に messages へ追加する
+      - tool 行の tool_call_id は、対応する assistant.tool_calls[i].id と一致する
+      - assistant が複数の tool を要求したら、その全てに tool 行を返す
+      - tool_calls を持たない assistant が出たら、そこで終える
+      - 実行しようとした tool が通算 max_tool_calls を超えるなら、
+        実行せずに ToolCallLimitExceeded を送出する
+
+    引数の messages をそのまま育て、同じ配列を返してよい。
+    """
+    tools = await mcp.list_tools()
+    raise NotImplementedError("ここを書く")</code></pre>
+    <p>
+      手がかりを二つだけ置く。tool 行の形は
+      <code>{"role": "tool", "tool_call_id": ..., "content": ...}</code> である。
+      そして <code>call["function"]["arguments"]</code> は JSON <em>文字列</em>なので、
+      <code>mcp.call_tool</code> に渡す前に <code>json.loads</code> する。
+      この二つを取り違えると、LLM は tool の結果を読めないまま二周目に入る。
+    </p>
+
+    <h3>自分で通すテスト</h3>
+    <p>
+      書けたかどうかは、実 Backlog に問い合わせて目視するのではなく、テストで判定する。
+      偽の LLM に一度目は tool call、二度目は最終文章を返させ、偽の MCP に決まった結果を返させる。
+      実 LLM は同じ入力に同じ応答を返さないので、不変条件の検証には使えない。
+    </p>
+    <pre><code class="language-bash">uv add --dev pytest anyio</code></pre>
+    <pre><code class="language-python"># tests/test_agent.py
+import pytest
+from typing import Any
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolParam,
+)
+
+from chat.agent import ToolCallLimitExceeded, run_tool_loop
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+class FakeLlm:
+    """台本どおりに応答し、渡された messages を記録する偽の LLM。"""
+
+    def __init__(self, script: list[ChatCompletionAssistantMessageParam]) -&gt; None:
+        self.script = script
+        self.seen: list[list[ChatCompletionMessageParam]] = []
+
+    async def complete(
+        self,
+        messages: list[ChatCompletionMessageParam],
+        tools: list[ChatCompletionToolParam],
+    ) -&gt; ChatCompletionAssistantMessageParam:
+        self.seen.append(list(messages))
+        return self.script[len(self.seen) - 1]
+
+
+class FakeMcp:
+    """決まった結果を返し、呼ばれた tool を記録する偽の MCP。"""
+
+    def __init__(self, results: dict[str, str]) -&gt; None:
+        self.results = results
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def list_tools(self) -&gt; list[ChatCompletionToolParam]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": "",
+                    "parameters": {"type": "object"},
+                },
+            }
+            for name in self.results
+        ]
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -&gt; str:
+        self.calls.append((name, arguments))
+        return self.results[name]
+
+
+def tool_call(
+    call_id: str, name: str, arguments: str
+) -&gt; ChatCompletionAssistantMessageParam:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        ],
+    }
+
+
+@pytest.mark.anyio
+async def test_tool_result_is_fed_back_to_the_llm():
+    llm = FakeLlm([
+        tool_call("call_1", "get_issues", '{"statusId[]": [1]}'),
+        {"role": "assistant", "content": "未完了の課題は 1 件です。"},
+    ])
+    mcp = FakeMcp({"get_issues": '[{"id": 42, "summary": "資料を更新する"}]'})
+
+    result = await run_tool_loop(
+        [{"role": "user", "content": "未完了課題を教えて"}],
+        llm=llm,
+        mcp=mcp,
+    )
+
+    # LLM が指定した引数で、tool がちょうど一度呼ばれた
+    assert mcp.calls == [("get_issues", {"statusId[]": [1]})]
+
+    # 二度目の LLM 呼び出しは、tool を要求した assistant 行と
+    # 対応する tool 行の両方を見ている
+    second = llm.seen[1]
+    assert second[1]["tool_calls"][0]["id"] == "call_1"
+    assert second[2]["role"] == "tool"
+    assert second[2]["tool_call_id"] == "call_1"
+
+    # 返る messages は 4 行そろっている
+    assert [row["role"] for row in result] == ["user", "assistant", "tool", "assistant"]
+    assert result[-1]["content"] == "未完了の課題は 1 件です。"
+
+
+@pytest.mark.anyio
+async def test_every_tool_call_gets_its_own_tool_row():
+    both = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "get_issues", "arguments": "{}"}},
+            {"id": "call_2", "type": "function",
+             "function": {"name": "get_projects", "arguments": "{}"}},
+        ],
+    }
+    llm = FakeLlm([both, {"role": "assistant", "content": "まとめました。"}])
+    mcp = FakeMcp({"get_issues": "[]", "get_projects": "[]"})
+
+    result = await run_tool_loop(
+        [{"role": "user", "content": "課題とプロジェクトを教えて"}],
+        llm=llm,
+        mcp=mcp,
+    )
+
+    tool_rows = [row for row in result if row["role"] == "tool"]
+    assert [row["tool_call_id"] for row in tool_rows] == ["call_1", "call_2"]
+
+
+@pytest.mark.anyio
+async def test_loop_stops_at_the_tool_call_limit():
+    llm = FakeLlm([tool_call("call_n", "get_issues", "{}")] * 10)
+    mcp = FakeMcp({"get_issues": "[]"})
+
+    with pytest.raises(ToolCallLimitExceeded):
+        await run_tool_loop(
+            [{"role": "user", "content": "終わらない依頼"}],
+            llm=llm,
+            mcp=mcp,
+            max_tool_calls=3,
+        )
+
+    # 上限を超える 4 回目は実行されていない
+    assert len(mcp.calls) == 3</code></pre>
+    <div class="why">
+      <strong>なぜテストを先に渡すのか</strong>
+      「動いた」の判定を実 Backlog の応答に任せると、LLM がたまたま tool を呼ばずに
+      それらしい文章を返したときにも成功に見える。
+      テストは、tool を呼んだこと、その結果が二度目の入力に入っていること、
+      id が対応していることを、曖昧さなく判定する。
+      これは v2 の <a href="./v2.html">保存の時点</a> を設計するときの土台にもなる。
+    </div>
+
+    <h3>CLI で実物に当てる</h3>
+    <p>
+      テストが緑になったら、実 Backlog と実 LLM に当てる。ここで初めて、
+      tool 名や引数が現実の Backlog MCP と噛み合うかが分かる。
+    </p>
+    <pre><code class="language-python"># src/chat/cli.py
+import asyncio
+import sys
+
+from chat.agent import run_agent
+from chat.settings import Settings
+
+
+async def _main(prompt: str) -&gt; None:
+    messages = [{"role": "user", "content": prompt}]
+    result = await run_agent(messages, Settings())
+    print(result[-1]["content"])
+
+
+def main() -&gt; None:
+    asyncio.run(_main(sys.argv[1]))</code></pre>
+    <pre><code class="language-bash">cd v1/backend
+uv run chat "Backlog の未完了課題を教えて"</code></pre>
+    <p>
+      開発中は <code>LOG_FORMAT=human</code> にして、tool 名、引数の要約、所要時間を一行ログで読む。
+      JSON ログはコンテナから集めるときに効くが、最初の数回は人が追える形の方が loop を観察しやすい。
+    </p>
+    <div class="note">
+      <strong>よくある詰まり方</strong>
+      <ul>
+        <li><code>arguments</code> を二重に JSON 化する。文字列のまま messages へ、dict にして <code>call_tool</code> へ</li>
+        <li>tool ごとに MCP 接続を開き直す。<code>initialize</code> と <code>list_tools</code> が毎回走る</li>
+        <li>assistant 行を残さず tool 結果だけを足す。LLM が対応を復元できない</li>
+        <li><code>inputSchema</code> と書く。mcp 2.x は <code>input_schema</code> である</li>
+      </ul>
+    </div>
+    <div class="check">
+      <strong>STEP 2 の合格線</strong>
+      三つのテストが緑になる。
+      ターミナルから実 Backlog のデータに基づく返答が返る。
+      ログを読み、どの assistant tool call にどの tool result が対応したかを説明できる。
+    </div>
+
+    <span class="label">STEP 3</span>
+    <h2 id="api">同じ loop を FastAPI で包む</h2>
+    <p>
+      CLI が通った後で、同じ関数を HTTP から呼べるようにする。
+      API 用に二つ目の loop を書くと、片方だけが修正される未来を作る。
+      FastAPI の役目は、入力を検証し、<code>run_agent</code> を呼び、結果を JSON にすることだけである。
+    </p>
+    <pre><code class="language-bash">uv add fastapi uvicorn</code></pre>
+    <pre><code class="language-http">POST /chat
+Content-Type: application/json
+
+{
+  "messages": [
+    {"role": "user", "content": "未完了課題を教えて"}
+  ]
+}</code></pre>
+    <pre><code class="language-json">{
+  "message": {
+    "role": "assistant",
+    "content": "未完了の課題は 3 件です。"
+  },
+  "messages": [
+    {"role": "user", "content": "未完了課題を教えて"},
+    {"role": "assistant", "content": null, "tool_calls": ["..."]},
+    {"role": "tool", "tool_call_id": "call_abc", "content": "..."},
+    {"role": "assistant", "content": "未完了の課題は 3 件です。"}
+  ]
+}</code></pre>
+    <p>
+      <code>message</code> は画面へ直ちに表示するための最終 assistant である。
+      <code>messages</code> は次のリクエストへ渡すための正規の会話履歴である。
+      二つを返すのは冗長に見えるが、役割が違う。前者は表示用、後者は入力用である。
+    </p>
+    <pre><code class="language-python"># src/chat/api.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+from openai.types.chat import ChatCompletionMessageParam
+
+from chat.agent import run_agent
+from chat.settings import Settings
+
+app = FastAPI()
+settings = Settings()
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatCompletionMessageParam]
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    messages = await run_agent(list(request.messages), settings)
+    return {"message": messages[-1], "messages": messages}
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True}</code></pre>
+    <p>
+      入力の配列をコピーしてから渡しているのは、<code>run_tool_loop</code> が
+      引数の配列を育てる契約だからである。リクエストのモデルを直接育てないほうが、
+      後で検証やログを足すときに扱いやすい。
+    </p>
+
+    <h3>二つ目の発言は全履歴を送る</h3>
+    <p>
+      一つ目のレスポンスを受けたクライアントは、最後の文章だけを覚えるのではない。
+      tool の行を含む <code>messages</code> 全体を保持し、次の発言に足して送る。
+    </p>
+    <pre><code class="language-http">POST /chat
+Content-Type: application/json
+
+{
+  "messages": [
+    {"role": "user", "content": "未完了課題を教えて"},
+    {"role": "assistant", "content": null, "tool_calls": ["前回の tool call"]},
+    {"role": "tool", "tool_call_id": "call_abc", "content": "前回の結果"},
+    {"role": "assistant", "content": "未完了の課題は 3 件です。"},
+    {"role": "user", "content": "その中で優先度が高いものは？"}
+  ]
+}</code></pre>
+    <p>
+      サーバーが覚えているから送らなくてよい、とはならない。
+      v1 のサーバーは DB も Chat セッション ID も持たない。
+      面倒に感じたら、それは v2 が解こうとしている問題を正しく体感したということである。
+    </p>
+
+    <h3>アクセスログをアプリ側でそろえる</h3>
+    <p>
+      Uvicorn のアクセスログは有用だが、tool 呼び出しのログと同じ request ID を持たせにくい。
+      middleware で request ID、method、path、status、duration を loguru に出し、
+      レスポンスヘッダにも同じ ID を返す。
+    </p>
+    <pre><code class="language-python">import time
+import uuid
+
+from loguru import logger
+
+
+@app.middleware("http")
+async def access_log(request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - started) * 1000
+    logger.bind(request_id=request_id).info(
+        "access method={} path={} status={} duration_ms={:.1f}",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    response.headers["x-request-id"] = request_id
+    return response</code></pre>
+    <p>
+      v1 では失敗を細かな <code>error.code</code> に正規化しない。
+      入力不正は FastAPI の validation error に任せ、LLM や MCP の失敗は
+      短いメッセージと適切な HTTP status に留める。
+      厳密な error 契約は、状態とストリームも持つ v2 で扱う。
+    </p>
+
+    <h3>Compose に chat-v1 を足す</h3>
+    <pre><code class="language-yaml">  chat-v1:
+    build: ./backend
+    environment:
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY}
+      OPENCODE_GO_BASE_URL: ${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}
+      OPENCODE_GO_MODEL: ${OPENCODE_GO_MODEL:-deepseek-v4-flash}
+      MCP_SERVER_URL: http://backlog-mcp:3333/mcp
+      LOG_FORMAT: ${LOG_FORMAT:-human}
+    depends_on:
+      - backlog-mcp
+    ports:
+      - "8001:8000"</code></pre>
+    <p>
+      <code>MCP_SERVER_URL</code> がホストの CLI と違うことを、ここで確認する。
+      CLI からは <code>http://127.0.0.1:3333/mcp</code>、コンテナからは
+      <code>http://backlog-mcp:3333/mcp</code> である。
+      理由は <a href="./index.html#mcp-service">共通の地図</a> にある。
+    </p>
+    <div class="check">
+      <strong>STEP 3 の合格線</strong>
+      <code>curl</code> の <code>POST /chat</code> が CLI と同じ <code>run_tool_loop</code> を通る。
+      応答は最終 assistant と全 messages を持つ同期 JSON である。
+      アクセスログに request ID が残り、レスポンスヘッダにも同じ値が返る。
+    </div>
+
+    <span class="label">STEP 4</span>
+    <h2 id="frontend">検証用フロント</h2>
+    <p>
+      このフロントは製品 UI ではない。API が求める messages の形と、
+      二つ目の発言に必要な履歴を、目で確かめるための実験台である。
+      <code>v1/frontend</code> に pnpm、React、axios、SWR を置き、Compose には含めない。
+      ローカルで <code>pnpm dev</code> を起動する。
+    </p>
+    <pre><code class="language-plaintext">v1/frontend/
+├── package.json
+├── src/
+│   ├── api.ts
+│   └── App.tsx
+└── .env.local</code></pre>
+    <p>
+      画面には入力欄、送信ボタン、ユーザー発言、最終 assistant 発言、health の状態があれば足りる。
+      tool call の JSON を常時出す必要はないが、開発中だけ折りたたみで見えるようにしておくと、
+      messages の実体を観察しやすい。
+    </p>
+    <pre><code class="language-typescript">import axios from "axios";
+
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL,
+});
+
+export async function postChat(messages: unknown[]) {
+  const { data } = await api.post("/chat", { messages });
+  return data as { message: unknown; messages: unknown[] };
+}</code></pre>
+    <pre><code class="language-typescript">const [messages, setMessages] = useState&lt;Message[]&gt;([]);
+const { data: health } = useSWR("/health", () =&gt; api.get("/health"));
+
+async function send(content: string) {
+  const next = [...messages, { role: "user", content }];
+  const response = await postChat(next);
+  // サーバーが返した配列で置き換える。tool 行を含む全履歴がここに入っている
+  setMessages(response.messages as Message[]);
+}</code></pre>
+    <p>
+      POST の送信は axios で足りる。SWR は <code>/health</code> のような GET の再取得に使い、
+      Chat の送信までキャッシュの形へ寄せる必要はない。
+      リロード後も会話を残したければ <code>messages</code> を localStorage に置いてよいが、
+      それはサーバーセッションではない。サーバーが履歴を預かる設計は v2 の範囲である。
+    </p>
+    <pre><code class="language-python">from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)</code></pre>
+    <p>
+      開発サーバーの origin と FastAPI の origin は異なるため、backend 側で許可する。
+      任意の origin を許す設定を、そのまま公開環境へ持ち込まない。
+    </p>
+    <div class="check">
+      <strong>STEP 4 の合格線</strong>
+      画面から「未完了課題を教えて」と送ると、実データに基づく返答が見える。
+      続けて質問すると、クライアントが保持した全 messages が POST される。
+    </div>
+
+    <span class="label">WRAP UP</span>
+    <h2 id="end">到達点を確かめる</h2>
+    <p>
+      v1 の完成は、画面に返答が出たことではない。次を観測できることである。
+    </p>
+    <ul>
+      <li>公式 Backlog MCP が Compose 上で HTTP 常駐し、<code>initialize</code> と <code>list_tools</code> が通る</li>
+      <li><code>run_tool_loop</code> の三つのテストが、実 LLM と実 MCP なしで緑になる</li>
+      <li><code>run_agent</code> が <code>ClientSession</code> を loop の外側で開き、実 MCP を通じて返答する</li>
+      <li>assistant の <code>tool_calls[i].id</code> と tool 行の <code>tool_call_id</code> が対応している</li>
+      <li><code>POST /chat</code> が CLI と同じ loop を通り、同期 JSON を返す</li>
+      <li>クライアントが全 messages を保持し、サーバーは DB も Chat セッションも持たない</li>
+      <li>loguru とアクセスログ middleware で、一回の要求と tool 実行を追える</li>
+      <li>React の検証画面から二回以上の発言を確認できる</li>
+    </ul>
+    <p>
+      ここまで来れば、Host を「LLM の tool call を MCP の <code>tools/call</code> へ渡し、
+      結果を正しい messages にして LLM へ戻すプログラム」と説明できる。
+      同時に、二つの不便さも実感しているはずである。
+      クライアントが tool 行まで含む全履歴を運ばなければならないこと。
+      tool を待っているあいだ、利用者には何も見えないこと。
+    </p>
+    <p>
+      その二つを Host 側へ引き取るのが <a href="./v2.html">v2 学習書</a> である。
+      v2 は v1 を終えていることを前提に書いてある。
+    </p>
+  </main>
+
+  <footer>
+    <p>
+      backlog-mcp-sandbox 学習ガイド。
+      <a href="./index.html">共通の地図</a> ／
+      <a href="./v1.html">v1</a> ／
+      <a href="./v2.html">v2</a>
+    </p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+          integrity="sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/http.min.js"
+          integrity="sha384-X50fiL5mByDvJRwn0hkUXIEttF5t8hlEFSPUMq42KoryxgI4niflBsviuhahhWJf"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"
+          integrity="sha384-aBQXj4hK6Jm05i7aQAsUV3bLdSUrHX1BGYfMB0166TtWt/RRaw+h0Eelme9OCOvy"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="./assets/guide.js"></script>
+</body>
+</html>

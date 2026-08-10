@@ -1,0 +1,9 @@
+{
+	"dependencies": {
+		"axios": "^1.19.0",
+		"swr": "^2.5.0"
+	},
+	"devDependencies": {
+		"oxfmt": "^0.62.0"
+	}
+}

@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>v2 学習書: セッション、SSE、観測できる失敗</title>
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css"
+        integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="./assets/guide.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="inner">
+      <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
+      <h1>v2 学習書<br />会話を覚え、途中を見せ、失敗を説明できる Host</h1>
+      <p class="lede">
+        v1 で書いた loop は変わらない。変わるのは、その loop の周りにある責務である。
+        会話を誰が持つか。途中経過をどう見せるか。失敗したとき何を残し、何を残さないか。
+      </p>
+      <nav class="series" aria-label="この教材の構成">
+        <a href="./index.html">共通の地図</a>
+        <a href="./v1.html">v1 ステートレス Host</a>
+        <a href="./v2.html" aria-current="page">v2 セッションと SSE</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="目次">
+      <strong>目次</strong>
+      <ol>
+        <li><span class="kind">OVERVIEW</span> <a href="#what">v2 で達成すること</a></li>
+        <li><span class="kind">STEP 1</span> <a href="#foundation">土台を三つに増やす</a></li>
+        <li><span class="kind">STEP 2</span> <a href="#persistence">保存の時点を決める</a></li>
+        <li><span class="kind">STEP 3</span> <a href="#sessions">セッション API</a></li>
+        <li><span class="kind">STEP 4</span> <a href="#sse">SSE で発言する</a></li>
+        <li><span class="kind">STEP 5</span> <a href="#operations">制限、error 契約、監査、health</a></li>
+        <li><span class="kind">STEP 6</span> <a href="#frontend">検証用フロント</a></li>
+        <li><span class="kind">WRAP UP</span> <a href="#outro">到達点を確かめる</a></li>
+      </ol>
+    </nav>
+
+    <div class="note">
+      <strong>この文書は v1 を終えていることを前提にする</strong>
+      tool loop の不変条件、二種類のセッションと二種類のストリーム、MCP を HTTP で常駐させる理由は
+      <a href="./index.html">共通の地図</a> にある。
+      <code>run_tool_loop</code> を自分で書き、テストを緑にした経験は
+      <a href="./v1.html">v1 学習書</a> にある。ここではどちらも説明し直さない。
+      v2 のコードは v1 から import せず、新しく書く。ただし理解は引き継ぐ。
+    </div>
+
+    <span class="label">OVERVIEW</span>
+    <h2 id="what">v2 で達成すること</h2>
+    <p>
+      v1 を使っていると、二つの不便さに突き当たる。
+      クライアントが tool 行まで含む全履歴を運ばなければならないこと。
+      そして tool を待っているあいだ、利用者には何も見えないことである。
+      v2 はこの二つを Host 側へ引き取る。引き取ると、v1 では問わずに済んだ問いが生まれる。
+      <strong>いつ保存するのか。失敗したとき何が残るのか。</strong>
+      これが v2 の中心にある問題であり、SSE も監査も、この問いの周辺に配置される。
+    </p>
+    <table>
+      <thead>
+        <tr><th>観点</th><th>v1</th><th>v2</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>履歴の所有者</td><td>クライアントが毎回 messages 一式を送る</td><td>Host が PostgreSQL から読み書きする</td></tr>
+        <tr><td>会話の入口</td><td><code>POST /chat</code> に messages を送る</td><td>セッションを作り、content だけを送る</td></tr>
+        <tr><td>応答</td><td>同期 JSON</td><td>Chat 応答は SSE のみ</td></tr>
+        <tr><td>tool の待ち時間</td><td>最終回答まで何も見えない</td><td>started / completed / failed を SSE で見せる</td></tr>
+        <tr><td>失敗の意味</td><td>短いメッセージと HTTP status</td><td>timeout、上限、<code>error.code</code> を契約する</td></tr>
+        <tr><td>書き込み操作</td><td>実行できればよい</td><td>指定した write tool をマスクして監査する</td></tr>
+      </tbody>
+    </table>
+
+    <h3>API</h3>
+    <table>
+      <thead>
+        <tr><th>メソッド</th><th>パス</th><th>成功時の意味</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>POST</code></td><td><code>/sessions</code></td><td>空の Chat セッションを作り、<code>{"id":"&lt;uuid&gt;"}</code> を返す</td></tr>
+        <tr><td><code>POST</code></td><td><code>/sessions/{id}/messages</code></td><td>発言を受け、SSE で tool 経過と回答を流す</td></tr>
+        <tr><td><code>GET</code></td><td><code>/sessions/{id}/messages</code></td><td><code>ordinal</code> 順の保存済み messages を返す</td></tr>
+        <tr><td><code>GET</code></td><td><code>/health</code></td><td>Host プロセスの生存を返す</td></tr>
+      </tbody>
+    </table>
+    <p>
+      create-or-continue 用の <code>POST /chat</code> は置かない。
+      未作成のときは Frontend が <code>POST /sessions</code> してから発言する。
+      セッションの一覧、削除、タイトル変更、メッセージ編集も作らない。
+      どれも必要になりうる機能だが、保存と SSE の整合を確かめるのに要らない。
+    </p>
+
+    <h3>v2 に入れないもの</h3>
+    <p>
+      認証の実装、SSE 経過イベントの DB 保存、Redis 等の cache、Kubernetes、承認 UI は入れない。
+      認証は後から差し込める位置だけを空け、今は Host の本体を観察できる状態に留める。
+    </p>
+
+    <h3>置き場</h3>
+    <pre><code class="language-plaintext">v2/
+├── compose.yaml     # backlog-mcp + postgres + chat-v2（v2 専用）
+├── backend/
+│   ├── pyproject.toml
+│   ├── alembic/
+│   ├── src/chat/
+│   │   ├── settings.py
+│   │   ├── llm.py
+│   │   ├── mcp_client.py
+│   │   ├── events.py     # Event と SSE 整形
+│   │   ├── errors.py     # AgentError と error 形式
+│   │   ├── agent.py      # tool loop（イベントを yield する）
+│   │   ├── store.py      # sessions / messages / 監査
+│   │   ├── audit.py
+│   │   └── api/
+│   └── tests/
+└── frontend/</code></pre>
+    <p>
+      パッケージ名は v1 と同じ <code>chat</code> でよい。別アプリなので衝突しない。
+      v1 のコードをコピーせず、v2 側で書き直す。
+    </p>
+
+    <span class="label">STEP 1</span>
+    <h2 id="foundation">土台を三つに増やす</h2>
+    <p>
+      <code>v2/compose.yaml</code> に <code>backlog-mcp</code>、<code>postgres</code>、<code>chat-v2</code> を置く。
+      <code>backlog-mcp</code> の定義は v1 と同じで、<a href="./index.html#mcp-service">共通の地図</a> にある。
+      Frontend は Compose に載せず、<code>pnpm dev</code> で別プロセスとして動かす。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart TB
+  FE["v2/frontend<br/>ローカル pnpm dev"] -->|"発言"| H["chat-v2<br/>FastAPI Host"]
+  H -->|"Chat SSE"| FE
+  H -->|"load / save messages"| DB[("postgres")]
+  H -->|"messages + tool schemas"| LLM["OpenCode Go"]
+  LLM -->|"tool_calls または最終回答"| H
+  H -->|"MCP Streamable HTTP"| MCP["backlog-mcp"]
+  MCP -->|"Backlog API"| B["Backlog"]
+      </div>
+    </div>
+    <p>
+      PostgreSQL は MCP の内部状態も、SSE の経過イベントも保存しない。
+      保存するのは、次の LLM 呼び出しへ渡せる messages と、書き込み tool の監査だけである。
+    </p>
+    <pre><code class="language-yaml">name: backlog-mcp-sandbox-v2
+
+services:
+  backlog-mcp:
+    # 共通の地図と同じ定義
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: chat_v2
+      POSTGRES_USER: chat_v2
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat_v2"]
+      interval: 5s
+      retries: 10
+
+  chat-v2:
+    build: ./backend
+    environment:
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY}
+      OPENCODE_GO_BASE_URL: ${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}
+      OPENCODE_GO_MODEL: ${OPENCODE_GO_MODEL:-deepseek-v4-flash}
+      MCP_SERVER_URL: http://backlog-mcp:3333/mcp
+      DATABASE_URL: postgresql+asyncpg://chat_v2:${POSTGRES_PASSWORD}@postgres:5432/chat_v2
+      LOG_FORMAT: ${LOG_FORMAT:-human}
+      LLM_TIMEOUT_SECONDS: "60"
+      MCP_TIMEOUT_SECONDS: "30"
+      MAX_TOOL_CALLS: "10"
+    depends_on:
+      backlog-mcp:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8002:8000"</code></pre>
+    <p>
+      backend の依存は v1 に <code>fastapi</code>、<code>uvicorn</code>、
+      <code>sqlalchemy[asyncio]</code>、<code>asyncpg</code>、<code>alembic</code> を足したものになる。
+      <code>GET /health</code> はこの段階で用意し、プロセスが HTTP を受けられることを示す。
+    </p>
+    <div class="check">
+      <strong>STEP 1 の合格線</strong>
+      <code>cd v2 &amp;&amp; docker compose up</code> で三つのサービスが起動する。
+      MCP のスモークが通り、<code>GET /health</code> が Host の生存を返す。
+      会話はまだ動かなくてよい。
+    </div>
+
+    <span class="label">STEP 2</span>
+    <h2 id="persistence">保存の時点を決める</h2>
+    <p>
+      DB に保存するのは、画面のために短く整えた会話ではない。
+      次の LLM 呼び出しへそのまま渡せる messages 一式である。
+      したがって assistant の <code>tool_calls</code> は JSON として残し、
+      tool 行の <code>tool_call_id</code> も残す。
+      SSE の経過イベントは保存しない。あれは配信のための一時的な信号であって、会話ではない。
+    </p>
+    <table>
+      <thead>
+        <tr><th>テーブル</th><th>主な列</th><th>役割</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>sessions</code></td><td>id、created_at、updated_at</td><td>Chat セッションの存在と時刻</td></tr>
+        <tr><td><code>messages</code></td><td>session_id、ordinal、role、content、tool_calls、tool_call_id、created_at</td><td>LLM へ再投入できる会話を順序付きで表す</td></tr>
+        <tr><td><code>tool_audit_logs</code></td><td>session_id、request_id、tool_name、masked_arguments、masked_result、status、started_at、finished_at</td><td>書き込み tool の説明責任</td></tr>
+      </tbody>
+    </table>
+    <p>
+      schema は Alembic の初回 migration として作る。
+      ローカルの偶然の DB 状態ではなく、どの環境でも同じ tables を再現できるようにするためである。
+      <code>ordinal</code> はセッション内での順序であり、表示だけでなく LLM に戻す順序として使う。
+    </p>
+
+    <h3>ここが v2 の中心にある契約</h3>
+    <p>
+      user 行は loop を始める<strong>前に</strong>保存する。
+      利用者が発言したという事実を、LLM や MCP やネットワークの失敗で消してはいけない。
+    </p>
+    <p>
+      これに対して、今回の assistant 行と tool 行は、loop が最終回答へ到達した後でまとめて保存する。
+      tool を一回実行するたびに保存すると、次の tool や LLM 呼び出しが失敗したとき、
+      DB には未完結の tool state が残る。次の発言でその配列を読み直すと、
+      LLM は「tool を要求した assistant 行の途中」から会話を再開することになる。
+    </p>
+    <div class="why">
+      <strong>成功の単位が二つある</strong>
+      「利用者が送信した」が成功したことと、「Host が応答を完結できた」が成功したことは別である。
+      前者は即座に確定させ、後者は完結した messages だけを確定させる。
+      こうすると、どこで失敗しても履歴は一貫した状態のままになる。
+    </div>
+    <p>
+      もう一つ、順序について決めることがある。保存と <code>message.completed</code> の前後関係である。
+      この教材は<strong>保存してから <code>message.completed</code> を送る</strong>。
+      逆にすると、保存に失敗したとき、利用者はすでに確定した回答を見ているのに
+      DB には残っていない、という食い違いが起きる。
+      先に保存しておけば、<code>message.completed</code> が届いたことは
+      「この turn は永続化された」と同義になる。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+sequenceDiagram
+  participant F as Frontend
+  participant A as Chat API
+  participant D as PostgreSQL
+  participant L as Host loop
+  F->>A: POST /sessions/{id}/messages
+  A->>D: 過去 messages を読む
+  A->>D: user 行を append して commit
+  A-->>F: event: session
+  A->>L: user 行を含む配列で loop
+  alt 最終 assistant まで成功
+    L-->>A: tool events を経て完結した messages
+    A->>D: この turn の assistant/tool 行を一式保存
+    A-->>F: event: message.completed
+  else timeout / MCP error / 上限超過
+    L-->>A: AgentError
+    Note over A,D: この turn の assistant/tool 行は保存しない
+    A-->>F: event: error
+  end
+  A-->>F: event: done
+      </div>
+    </div>
+    <pre><code class="language-plaintext">session_id = 5f...a1、ordinal 順
+1  user       content = "未完了課題を教えて"
+2  assistant  content = null, tool_calls = [{"id":"call_81", ...}]
+3  tool       tool_call_id = "call_81", content = "[{...}]"
+4  assistant  content = "未完了の課題は 1 件です。..."</code></pre>
+    <div class="check">
+      <strong>STEP 2 の合格線</strong>
+      user 行は loop 前に残る。
+      成功した turn は tool 行を含む messages 一式として再読できる。
+      timeout、MCP error、上限超過の後に、その turn の assistant/tool 行が DB に残っていない。
+    </div>
+
+    <span class="label">STEP 3</span>
+    <h2 id="sessions">セッション API</h2>
+    <p>
+      SSE を足す前に、セッションを作る入口と、保存済み履歴を読む入口を固定する。
+      発言 API が参照する会話の単位を、HTTP の契約として確定させるためである。
+    </p>
+    <p>
+      存在しない UUID に履歴を要求したときは、HTTP status とともに
+      <code>session_not_found</code> を含む共通 error 形式を返す。
+      ここではまだ発言を処理しないので、同期 JSON の error body でよい。
+      SSE 専用なのは Chat 応答だけであり、すべての API をストリームにするわけではない。
+    </p>
+    <pre><code class="language-json">{
+  "error": {
+    "code": "session_not_found",
+    "message": "指定されたセッションは存在しません。",
+    "retryable": false,
+    "details": {}
+  }
+}</code></pre>
+    <p>
+      認証は実装しない。ただし route の dependency から呼べる
+      <code>current_principal</code> のような hook を置く。
+      今は常に通過する実装とし、後から認証を加えるときに
+      セッション所有者の検証を差し込める境界だけを残す。
+    </p>
+    <div class="note">
+      <strong>認証 hook はアクセス制御ではない</strong>
+      何もしない dependency を置いても、現時点でセッションが保護されるわけではない。
+      この教材の範囲は、認証を先送りしても route と永続化の責務が崩れない位置を作ることに限る。
+    </div>
+    <div class="check">
+      <strong>STEP 3 の合格線</strong>
+      空のセッションを作り、空の履歴を取得できる。
+      存在しないセッションは共通 error 形式で失敗する。
+      <code>POST /chat</code> は存在しない。
+    </div>
+
+    <span class="label">STEP 4</span>
+    <h2 id="sse">SSE で発言する</h2>
+    <p>
+      発言 API は <code>POST /sessions/{id}/messages</code> である。
+      request body は <code>{"content":"未完了課題を教えて"}</code> だけを持つ。
+      過去の messages はクライアントから受け取らない。
+      Host が <code>session_id</code> で DB から読み、今回の user 行を足す。
+    </p>
+    <p>
+      応答は SSE のみとする。同じ発言に対して同期 JSON を返す別 endpoint は作らない。
+      二つの応答形式を並べると、Frontend がどちらを正とするか、
+      エラーの終端をどう解釈するかが二重になる。契約は一つに絞る。
+    </p>
+    <table>
+      <thead>
+        <tr><th>event</th><th>data の要点</th><th>Frontend がすること</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>session</code></td><td>id</td><td>利用中の Chat セッションを確認する</td></tr>
+        <tr><td><code>tool_call.started</code></td><td>name、call_id</td><td>実行開始を表示する</td></tr>
+        <tr><td><code>tool_call.completed</code></td><td>name、call_id</td><td>成功した tool を完了表示にする</td></tr>
+        <tr><td><code>tool_call.failed</code></td><td>name、call_id、error</td><td>失敗した tool を区別して表示する</td></tr>
+        <tr><td><code>message.delta</code></td><td>content</td><td>最終回答の表示バッファへ足す</td></tr>
+        <tr><td><code>message.completed</code></td><td>role、content</td><td>assistant の最終メッセージを確定する</td></tr>
+        <tr><td><code>error</code></td><td>code、message、retryable、details</td><td>発言が完了していないことを表示する</td></tr>
+        <tr><td><code>done</code></td><td>空 object</td><td>この HTTP ストリームを閉じる</td></tr>
+      </tbody>
+    </table>
+    <p>
+      LLM の raw な中間状態やプロバイダー固有イベントは SSE に出さない。
+      診断に必要なら loguru に記録する。
+      利用者へ公開するのは、会話の進行を理解するために必要な最小集合に留める。
+    </p>
+
+    <h3>ワイヤ形式と error / event を作る層（全文を渡す）</h3>
+    <pre><code class="language-python"># src/chat/events.py
+import json
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class Event:
+    name: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+    @staticmethod
+    def tool_started(name: str, call_id: str) -&gt; "Event":
+        return Event("tool_call.started", {"name": name, "call_id": call_id})
+
+    @staticmethod
+    def tool_completed(name: str, call_id: str) -&gt; "Event":
+        return Event("tool_call.completed", {"name": name, "call_id": call_id})
+
+    @staticmethod
+    def tool_failed(name: str, call_id: str, code: str) -&gt; "Event":
+        return Event("tool_call.failed", {"name": name, "call_id": call_id, "error": code})
+
+    @staticmethod
+    def message_delta(content: str) -&gt; "Event":
+        return Event("message.delta", {"content": content})
+
+
+def sse(name: str, data: dict[str, Any]) -&gt; str:
+    """1 イベントを SSE のワイヤ形式にする。
+
+    SSE は改行でフィールドを区切るため、data の JSON に生の改行を入れられない。
+    json.dumps は文字列中の改行を \\n へエスケープするので、indent を付けなければ安全である。
+    """
+    return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"</code></pre>
+    <pre><code class="language-python"># src/chat/errors.py
+from typing import Any
+
+
+class AgentError(Exception):
+    """利用者へ返せる形が決まっている失敗。"""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        details: dict[str, Any] | None = None,
+    ) -&gt; None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.details = details or {}
+
+    def to_event_data(self) -&gt; dict[str, Any]:
+        """SSE の error イベントに載せる形。"""
+        return {
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+            "details": self.details,
+        }
+
+    def to_body(self) -&gt; dict[str, Any]:
+        """同期 JSON API が返す形。"""
+        return {"error": self.to_event_data()}
+
+
+def internal_error() -&gt; AgentError:
+    # 予期しない例外の中身を利用者へ出さない。詳細は loguru へ出す
+    return AgentError("internal_error", "内部エラーが発生しました。", retryable=False)</code></pre>
+
+    <h3>loop にイベントを足す</h3>
+    <p>
+      v1 の <code>run_tool_loop</code> は最終的な messages を返すだけだった。
+      v2 の loop は、同じ往復をしながら、節目を <strong>実際にその処理をした時点で</strong> yield する。
+      まとめて後から流すと、SSE を見せる意味がなくなる。
+    </p>
+    <p>
+      ここで <code>message.completed</code> を loop から出さないことに注意する。
+      あれは「保存が終わった」という意味を持つイベントなので、
+      DB を知らない loop の責務ではない。loop が出すのは tool の経過と、
+      最終回答を token stream で受け取れる構成なら <code>message.delta</code> までである。
+    </p>
+    <pre><code class="language-python"># src/chat/agent.py
+from collections.abc import AsyncIterator
+
+
+async def agent_events(messages: list[dict], settings: Settings) -&gt; AsyncIterator[Event]:
+    """messages を育てながら、経過イベントを yield する。
+
+    v1 の run_tool_loop と同じ不変条件を満たす。加えて:
+      - tool を実行する直前に tool_started、成功した直後に tool_completed
+      - tool が失敗したら tool_failed を yield してから AgentError を送出する
+      - message.completed は yield しない（保存を知らないため）
+      - 完結した messages は、引数の配列を育てる形で呼び出し元へ渡す
+    """
+    async with streamable_http_client(settings.mcp_server_url) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            mcp = BacklogMcp(session, timeout_seconds=settings.mcp_timeout_seconds)
+            tools = await mcp.list_tools()
+            ...</code></pre>
+    <p>
+      v1 で書いた loop をここへ移し、tool の前後に yield を挟むだけである。
+      新しい概念は入らない。timeout については STEP 5 で扱う。
+    </p>
+
+    <h3>保存と終端を組み立てる</h3>
+    <div class="task">
+      <strong>ここはあなたが書く</strong>
+      <code>stream_turn</code> は v2 でいちばん間違えやすい関数である。
+      保存の時点、成功と失敗の分岐、どの経路でも <code>done</code> で閉じること。
+      この三つが同時に効く場所なので、ガイドは契約とテストだけを置く。
+    </div>
+    <pre><code class="language-python"># src/chat/api/messages.py
+from collections.abc import AsyncIterator
+from uuid import UUID
+
+
+async def stream_turn(
+    session_id: UUID,
+    content: str,
+    *,
+    store: MessageStore,
+    agent: AgentEvents,
+) -&gt; AsyncIterator[str]:
+    """一回の発言を処理し、SSE の文字列を順に yield する。
+
+    契約:
+      - 存在しないセッションなら session_not_found の error を送り、done で閉じる
+      - user 行は loop を始める前に保存する
+      - 最初に送るのは session イベント
+      - loop が出すイベントは、届いた順にそのまま流す
+      - loop が完結したら、この turn の assistant/tool 行を保存してから
+        message.completed を送る（保存が先。順序を逆にしない）
+      - AgentError は error イベントにする。予期しない例外は loguru に出し、
+        internal_error として error イベントにする
+      - 成功しても失敗しても、最後は必ず done を送る
+      - 失敗した turn の assistant/tool 行を DB に残さない
+    """
+    raise NotImplementedError("ここを書く")</code></pre>
+    <p>
+      手がかりを一つ置く。<code>agent_events</code> が messages を in-place で育てるなら、
+      例外で抜けた時点の配列には未完結の行が入っている。
+      その配列をそのまま保存しないために、
+      <strong>保存する範囲を loop の前に決めておく</strong>必要がある。
+    </p>
+    <p>
+      <code>agent</code> を引数で受けているのは、テストで差し替えるためである。
+      route 側では <code>agent=lambda rows: agent_events(rows, settings)</code> のように束ねて渡す。
+      <code>stream_turn</code> が <code>Settings</code> を知らずに済むと、
+      保存と終端の契約だけを単体で検証できる。
+    </p>
+
+    <h3>自分で通すテスト</h3>
+    <pre><code class="language-python"># tests/test_stream_turn.py
+from uuid import UUID
+
+import pytest
+
+from chat.errors import AgentError
+from chat.events import Event
+from chat.api.messages import stream_turn
+
+SESSION_ID = UUID("5f2a7b8e-0000-0000-0000-000000000001")
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+class FakeStore:
+    """messages を配列 1 本で持つ偽の永続化層。"""
+
+    def __init__(self) -&gt; None:
+        self.rows: list[dict] = []
+
+    async def exists(self, session_id) -&gt; bool:
+        return session_id == SESSION_ID
+
+    async def load(self, session_id) -&gt; list[dict]:
+        return [dict(row) for row in self.rows]
+
+    async def append(self, session_id, rows: list[dict]) -&gt; None:
+        self.rows.extend(dict(row) for row in rows)
+
+
+def names(chunks: list[str]) -&gt; list[str]:
+    """SSE の文字列から event 名だけを取り出す。"""
+    return [chunk.split("\n", 1)[0].removeprefix("event: ") for chunk in chunks]
+
+
+def succeeding_agent(messages: list[dict], settings=None):
+    async def run():
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function",
+                            "function": {"name": "get_issues", "arguments": "{}"}}],
+        })
+        yield Event.tool_started("get_issues", "call_1")
+        messages.append({"role": "tool", "tool_call_id": "call_1", "content": "[]"})
+        yield Event.tool_completed("get_issues", "call_1")
+        messages.append({"role": "assistant", "content": "未完了の課題はありません。"})
+    return run()
+
+
+def failing_agent(messages: list[dict], settings=None):
+    async def run():
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function",
+                            "function": {"name": "get_issues", "arguments": "{}"}}],
+        })
+        yield Event.tool_started("get_issues", "call_1")
+        yield Event.tool_failed("get_issues", "call_1", "mcp_timeout")
+        raise AgentError("mcp_timeout", "MCP がタイムアウトしました。", retryable=True)
+    return run()
+
+
+@pytest.mark.anyio
+async def test_successful_turn_saves_before_confirming():
+    store = FakeStore()
+    chunks = [c async for c in stream_turn(
+        SESSION_ID, "未完了課題を教えて", store=store, agent=succeeding_agent
+    )]
+
+    # 保存は message.completed より前に済んでいる
+    assert names(chunks) == [
+        "session",
+        "tool_call.started",
+        "tool_call.completed",
+        "message.completed",
+        "done",
+    ]
+    assert [row["role"] for row in store.rows] == ["user", "assistant", "tool", "assistant"]
+    assert store.rows[2]["tool_call_id"] == "call_1"
+
+
+@pytest.mark.anyio
+async def test_failed_turn_keeps_only_the_user_row():
+    store = FakeStore()
+    chunks = [c async for c in stream_turn(
+        SESSION_ID, "未完了課題を教えて", store=store, agent=failing_agent
+    )]
+
+    # 途中まで進んだ assistant / tool 行は残らない
+    assert [row["role"] for row in store.rows] == ["user"]
+    assert names(chunks)[-2:] == ["error", "done"]
+
+
+@pytest.mark.anyio
+async def test_unknown_session_still_closes_the_stream():
+    store = FakeStore()
+    chunks = [c async for c in stream_turn(
+        UUID(int=0), "未完了課題を教えて", store=store, agent=succeeding_agent
+    )]
+
+    assert names(chunks) == ["error", "done"]
+    assert store.rows == []</code></pre>
+    <div class="why">
+      <strong>このテストが守っているもの</strong>
+      三つとも、実際に動かして目視するのが難しい性質である。
+      失敗した turn に何が残らないかは、失敗を意図的に起こさないと確認できない。
+      「保存してから確定を送る」順序は、正常系を眺めていても見えない。
+      SSE が必ず <code>done</code> で閉じることは、閉じ忘れたときに
+      ブラウザがハングして初めて気づく。どれも、後から直すと高くつく。
+    </div>
+
+    <h3>ワイヤを目で見る</h3>
+    <pre><code class="language-plaintext">event: session
+data: {"id":"5f2a7b8e-..."}
+
+event: tool_call.started
+data: {"name":"get_issues","call_id":"call_81"}
+
+event: tool_call.completed
+data: {"name":"get_issues","call_id":"call_81"}
+
+event: message.completed
+data: {"role":"assistant","content":"未完了の課題は 1 件です。..."}
+
+event: done
+data: {}</code></pre>
+    <pre><code class="language-bash">curl -N \
+  -H "Accept: text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"未完了課題を教えて"}' \
+  http://127.0.0.1:8002/sessions/&lt;session-id&gt;/messages</code></pre>
+    <p>
+      <code>-N</code> は curl の出力バッファを止める。
+      これで、完了後にまとめて表示されるのではなく、到着した event ごとに読める。
+      FastAPI 側は <code>StreamingResponse</code> に
+      <code>media_type="text/event-stream"</code> を指定し、
+      <code>stream_turn</code> をそのまま渡せばよい。
+    </p>
+    <div class="check">
+      <strong>STEP 4 の合格線</strong>
+      三つのテストが緑になる。
+      curl で event の区切りを観察でき、tool の経過が最終回答より先に届く。
+      成功時は <code>message.completed</code> と <code>done</code>、失敗時は <code>error</code> と <code>done</code> で終わる。
+    </div>
+
+    <span class="label">STEP 5</span>
+    <h2 id="operations">制限、error 契約、監査、health</h2>
+    <p>
+      外部サービスを二つ含む Host は、成功する経路だけでは説明できない。
+      LLM が遅い、MCP が応答しない、tool が終わらない、入力が不正である。
+      これらを区別しないと、Frontend は再試行すべき失敗と、入力を直すべき失敗を判定できない。
+    </p>
+
+    <h3>時間と回数の上限</h3>
+    <table>
+      <thead>
+        <tr><th>設定</th><th>既定値</th><th>止める対象</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>LLM_TIMEOUT_SECONDS</code></td><td>60</td><td>一回の LLM 呼び出しが待ち続けること</td></tr>
+        <tr><td><code>MCP_TIMEOUT_SECONDS</code></td><td>30</td><td>一回の MCP 操作が待ち続けること</td></tr>
+        <tr><td><code>MAX_TOOL_CALLS</code></td><td>10</td><td>一発言で tool を無限に呼ぶこと</td></tr>
+      </tbody>
+    </table>
+    <p>
+      LLM と MCP の timeout を一つにまとめない。呼び出し先も、見るべきログも、
+      再試行の意味も異なるためである。
+      tool の回数は assistant メッセージの数ではなく、実行した tool call の数で数える。
+    </p>
+    <p>
+      実装は自前で <code>wait_for</code> を巻くより、SDK の口を使うほうが素直である。
+      <code>ClientSession.call_tool</code> は <code>read_timeout_seconds</code> を受け、
+      <code>AsyncOpenAI</code> は <code>timeout</code> を受ける。
+      どちらも、超えたら自分の例外を投げるので、それを <code>AgentError</code> に翻訳する。
+    </p>
+
+    <h3>共通の error 形式</h3>
+    <table>
+      <thead>
+        <tr><th>code</th><th>意味</th><th>retryable の目安</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>llm_timeout</code></td><td>LLM 応答待ちが上限を超えた</td><td>true</td></tr>
+        <tr><td><code>llm_error</code></td><td>LLM 側の障害、不正応答</td><td>状況依存</td></tr>
+        <tr><td><code>mcp_timeout</code></td><td>MCP 呼び出しが上限を超えた</td><td>true</td></tr>
+        <tr><td><code>mcp_error</code></td><td>MCP / Backlog 側の失敗</td><td>状況依存</td></tr>
+        <tr><td><code>max_tool_calls</code></td><td>tool 回数の上限に達した</td><td>false</td></tr>
+        <tr><td><code>session_not_found</code></td><td>不明なセッション</td><td>false</td></tr>
+        <tr><td><code>validation_error</code></td><td>リクエスト不正</td><td>false</td></tr>
+        <tr><td><code>internal_error</code></td><td>その他</td><td>false</td></tr>
+      </tbody>
+    </table>
+    <p>
+      途中で <code>message.delta</code> を送った後に error が起きることもある。
+      その内容を最終回答として確定してはいけない。
+      Frontend は <code>message.completed</code> を受けたときだけ回答を確定し、
+      <code>error</code> を受けたら未完了の表示を残す。
+      STEP 2 で保存を先に置いたので、この規則は
+      「確定した回答は必ず DB にある」という保証と一致する。
+    </p>
+
+    <h3>書き込み tool の監査</h3>
+    <p>
+      sandbox なので Backlog tool は読み書きとも原則許可する。
+      ただし <code>WRITE_TOOL_NAMES</code> に登録した tool 名に一致したら、
+      <code>tool_audit_logs</code> へ記録する。
+      tool 名は推測で決めず、実際に <code>list_tools</code> が返した名前を確認して設定する。
+    </p>
+    <pre><code class="language-python"># src/chat/audit.py
+async def audited_call(mcp, name: str, args: dict, call_id: str, settings, store):
+    is_write = name in settings.write_tool_names
+    started = utcnow()
+    try:
+        result = await mcp.call_tool(name, args)
+    except Exception as exc:
+        if is_write:
+            await store.save_audit(
+                name, mask(args), mask_error(exc), "error", started, utcnow()
+            )
+        raise
+    if is_write:
+        await store.save_audit(
+            name, mask(args), mask(result), "ok", started, utcnow()
+        )
+    return result</code></pre>
+    <p>
+      マスクの対象は、API key、Bearer token、password に見える key と value である。
+      課題本文のような一般コンテンツまで無差別に伏せない。
+      そして、マスク前の値を loguru に出してしまえば DB だけを守っても意味がないので、
+      ログの引数も同じ関数を通す。
+    </p>
+    <div class="why">
+      <strong>監査は権限管理ではない</strong>
+      監査ログがあっても、書き込みが安全になるわけではない。
+      これは「何を呼び、何が返ったか」を後から説明できるようにする記録であり、
+      「呼んでよいか」を判断する仕組みではない。
+      後者が必要になったら、STEP 3 で空けた認証 hook の位置に足す。
+    </div>
+
+    <h3>ログ、access log、health</h3>
+    <p>
+      loguru は <code>LOG_FORMAT=human</code> で開発時に読める形を出し、
+      <code>json</code> で構造化ログを出す。
+      HTTP middleware は request_id、method、path、status、duration_ms を記録し、
+      取れる範囲で session_id も bind する。
+      これで、一回の Chat SSE と、その中の LLM と MCP の記録を同じ request_id で辿れる。
+    </p>
+    <p>
+      <code>GET /health</code> は必須である。まずはプロセスがリクエストを受けられることを示せばよい。
+      DB、MCP、LLM の深い依存確認まで health に入れると、
+      依存先の一時的な失敗で Host 自身の生存判定まで失う。
+      依存先の状態は別のログと操作で診断する。
+    </p>
+    <div class="check">
+      <strong>STEP 5 の合格線</strong>
+      timeout と tool 上限が、決めた code で終わる。
+      error の stream は必ず <code>done</code> で閉じる。
+      write tool の監査行がマスク済みで増える。
+      <code>/health</code> と、request_id を含む access log を確認できる。
+    </div>
+
+    <span class="label">STEP 6</span>
+    <h2 id="frontend">検証用フロント</h2>
+    <p>
+      <code>v2/frontend</code> は完成品の Chat UI ではない。API 契約を目で確かめる検証用の React アプリである。
+      Compose には入れず、<code>pnpm dev</code> で動かす。
+      backend の再起動と UI のホットリロードを別々に扱えるので、どちらの問題かを切り分けやすい。
+    </p>
+    <table>
+      <thead>
+        <tr><th>画面の状態</th><th>取得元</th><th>意味</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>session_id</td><td><code>POST /sessions</code></td><td>未作成なら発行し、以後の API パスに使う</td></tr>
+        <tr><td>履歴</td><td><code>GET /sessions/{id}/messages</code></td><td>リロード後に成功済み messages を表示する</td></tr>
+        <tr><td>tool 経過</td><td>SSE の tool events</td><td>開始、成功、失敗を一時表示する</td></tr>
+        <tr><td>回答バッファ</td><td><code>message.delta</code></td><td>受信中の最終回答を表示する</td></tr>
+        <tr><td>回答確定</td><td><code>message.completed</code></td><td>永続化された assistant メッセージとして固定する</td></tr>
+      </tbody>
+    </table>
+    <p>
+      axios と SWR は通常の HTTP に使う。発言の SSE は axios に無理に寄せず、
+      <code>fetch</code> の <code>ReadableStream</code> を読んで event / data の境界を解析する。
+    </p>
+    <pre><code class="language-javascript">const response = await fetch(
+  `${apiBase}/sessions/${sessionId}/messages`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({ content }),
+  },
+);
+
+for await (const event of readSseEvents(response.body)) {
+  applyChatEvent(event);
+}</code></pre>
+    <div class="note">
+      <strong>chunk ごとに JSON.parse しない</strong>
+      ネットワークの chunk 境界は、SSE イベントの境界と一致しない。
+      テキストを buffer に貯め、空行でイベントを区切り、
+      <code>event:</code> と <code>data:</code> を取り出してから JSON を解析する。
+      ここを飛ばすと、長い回答のときだけ壊れる不具合になる。
+    </div>
+    <p>
+      送信ボタンを押したら、user の入力をすぐ画面へ仮表示してよい。
+      ただし server が user 行を保存することと、Frontend が仮表示することは別の責務である。
+      stream が error で終わったら、最終 assistant を確定させず、
+      受信済みの delta と error を「未完了」と分かる形で残す。
+    </p>
+    <div class="check">
+      <strong>STEP 6 の合格線</strong>
+      起動時にセッションを作り、リロード後は履歴 GET で成功済みの会話を戻せる。
+      画面で tool の開始と終了、回答の進行、error の終端を区別して見られる。
+      Frontend は <code>pnpm dev</code> でローカル起動し、Compose サービスには含めない。
+    </div>
+
+    <span class="label">WRAP UP</span>
+    <h2 id="outro">到達点を確かめる</h2>
+    <p>
+      v2 の到達点は、Chat UI が一度表示できることではない。
+      Host が持つ責務を説明でき、観測によってその説明を確かめられることにある。
+    </p>
+    <ul>
+      <li><code>cd v2 &amp;&amp; docker compose up</code> で三つのサービスが起動する</li>
+      <li>同じ session_id を使うと、プロセス再起動後にも保存済み messages を取得できる</li>
+      <li>user 行は loop 前に保存され、失敗した turn の assistant/tool 行は残らない</li>
+      <li><code>message.completed</code> が届いた回答は、必ず DB にも入っている</li>
+      <li>保存済み messages には assistant の <code>tool_calls</code> と対応する <code>tool_call_id</code> が含まれる</li>
+      <li>Chat 応答は <code>POST /sessions/{id}/messages</code> の SSE だけで、<code>POST /chat</code> はない</li>
+      <li>SSE は正常時も失敗時も <code>done</code> で終わる</li>
+      <li>LLM 60 秒、MCP 30 秒、tool 10 回の既定制限と、その <code>error.code</code> を確認できる</li>
+      <li>設定済みの write tool が、秘密らしき値をマスクした監査行を残す</li>
+      <li><code>/health</code> と request_id を含むログで、Host の生存と一回の要求を追える</li>
+      <li><code>v2/frontend</code> をローカルの <code>pnpm dev</code> で動かし、SSE を画面で確認できる</li>
+    </ul>
+    <p>
+      ここまで追えれば、会話を覚えることと、SSE を返すことと、MCP を HTTP で呼ぶことが、
+      同じ「セッション」でも同じ「ストリーム」でもないと区別できる。
+      その区別ができれば、認証、利用者ごとの所有権、より厳しい監査、再試行方針を足すときも、
+      どの層へ置くべきかを自分で判断できる。
+    </p>
+  </main>
+
+  <footer>
+    <p>
+      backlog-mcp-sandbox 学習ガイド。
+      <a href="./index.html">共通の地図</a> ／
+      <a href="./v1.html">v1</a> ／
+      <a href="./v2.html">v2</a>
+    </p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+          integrity="sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"
+          integrity="sha384-aBQXj4hK6Jm05i7aQAsUV3bLdSUrHX1BGYfMB0166TtWt/RRaw+h0Eelme9OCOvy"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="./assets/guide.js"></script>
+</body>
+</html>

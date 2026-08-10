@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>共通の地図: Backlog MCP Host を自分で作る</title>
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css"
+        integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="./assets/guide.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="inner">
+      <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
+      <h1>共通の地図<br />Backlog MCP Host を自分で作る</h1>
+      <p class="lede">
+        v1 と v2 が共有する原理をここに置く。tool loop とは何か、なぜ MCP を HTTP で常駐させるのか、
+        「セッション」と「ストリーム」がどちらも二つあるのはなぜか。手順に入る前に、この地図を読む。
+      </p>
+      <nav class="series" aria-label="この教材の構成">
+        <a href="./index.html" aria-current="page">共通の地図</a>
+        <a href="./v1.html">v1 ステートレス Host</a>
+        <a href="./v2.html">v2 セッションと SSE</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="目次">
+      <strong>目次</strong>
+      <ol>
+        <li><a href="#about">この教材の読み方</a></li>
+        <li><a href="#why-host">なぜ自前の MCP Host を書くのか</a></li>
+        <li><a href="#loop">tool loop の原理</a></li>
+        <li><a href="#sessions">二種類のセッション</a></li>
+        <li><a href="#streams">二種類のストリーム</a></li>
+        <li><a href="#mcp-service">公式 Backlog MCP を HTTP で常駐させる</a></li>
+        <li><a href="#sdk-level">MCP SDK のどの水準を使うか</a></li>
+        <li><a href="#environment">環境と秘密情報</a></li>
+        <li><a href="#next">次に読むもの</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="about">この教材の読み方</h2>
+    <p>
+      このリポジトリの目的は Backlog を操作することではない。公式 Backlog MCP を使うだけなら、
+      Claude Desktop や Cursor の MCP 設定に足せば済む。それでも自前の Host を書くのは、
+      LLM 呼び出しと tool 実行の境界を、自分のコードとして読める場所に置くためである。
+      したがって完成の基準は「画面に返答が出ること」ではなく、
+      なぜその messages の並びでなければならないかを説明できることになる。
+    </p>
+    <p>
+      教材は二段に分かれる。<strong>v1</strong> はステートレスな Host で、tool loop だけを扱う。
+      <strong>v2</strong> は最終成果物で、会話の永続化、SSE、制限と失敗の契約、監査を足す。
+      v1 と v2 は<strong>コードを共有しない</strong>独立したアプリケーションである。
+      共通ライブラリにまとめると、二つの実装を並べて差分を読むという学習手段が失われるためである。
+    </p>
+    <p>
+      一方でこの文書は共有する。原理は版によって変わらないからだ。
+      v1.html と v2.html には、その版でしか意味を持たない手順だけを置く。
+      読む順序は index、v1、v2 とする。v2.html は v1 を終えていることを前提に書かれており、
+      tool loop を最初から説明し直さない。
+    </p>
+    <div class="note">
+      <strong>ガイドが答えを出さない箇所がある</strong>
+      各版の手順には、青枠で <strong>あなたが書く</strong> と示した節がある。
+      そこはガイドが実装を渡さず、満たすべき不変条件と、自分で通せるテストだけを置く。
+      写経で通過できてしまう部分は、この教材の目的を達成しない。
+      逆に、SDK の型を捌くだけの雑務コードは全文を渡す。そこで詰まっても得るものがないためである。
+    </div>
+
+    <h2 id="why-host">なぜ自前の MCP Host を書くのか</h2>
+    <p>
+      IDE の plugin に公式 MCP を追加する方法は、個人の調査には速い。
+      しかし plugin は、LLM がどの tool を選び、その結果が次の推論にどう渡ったかを、
+      あなたのコードとして見せない。Host が担う翻訳が、製品の内側に隠れている。
+    </p>
+    <table>
+      <thead>
+        <tr><th>使い方</th><th>得られるもの</th><th>見えないもの</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>IDE plugin</td>
+          <td>すぐに Backlog を操作できる対話</td>
+          <td>tool 呼び出しの保持、失敗の切り分け、HTTP API としての境界</td>
+        </tr>
+        <tr>
+          <td>自前 Host</td>
+          <td>LLM、MCP、クライアントをつなぐ制御を自分で持つ</td>
+          <td>最初の接続までに書くコードが増える</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      Host の仕事は仲介である。LLM は「この関数をこの引数で呼びたい」と返す。
+      MCP は「この tool をこの引数で実行する」というプロトコルで Backlog に届く。
+      Host は両者のあいだで、tool の定義を渡し、tool call を実行し、結果を会話履歴へ編み戻す。
+    </p>
+    <div class="why">
+      <strong>フレームワークに loop を委譲しない理由</strong>
+      LangChain や LangGraph に任せれば、同じ動作をはるかに短く書ける。
+      ただし tool result がどこで messages に追加されたかを自分で追う、という目的には合わない。
+      これは「フレームワークを使うべきでない」という主張ではない。
+      loop の不変条件を理解した後なら、抽象化を採用しても何が隠れたのかを判断できる。
+      その判断力を先に作る、という順序の話である。
+    </div>
+
+    <h2 id="loop">tool loop の原理</h2>
+    <p>
+      典型的な入力は「Backlog の未完了課題を教えて」である。この一文の裏で、次の連鎖が起きる。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+sequenceDiagram
+  participant C as 呼び出し元
+  participant H as Host
+  participant M as Backlog MCP
+  participant L as LLM
+  C->>H: 発話
+  H->>M: initialize / list_tools
+  H->>L: messages + tool schemas
+  L-->>H: assistant（tool_calls つき）
+  H->>M: tools/call
+  M-->>H: tool result
+  H->>L: assistant 行 + role=tool 行を含む messages
+  L-->>H: assistant（最終回答）
+  H-->>C: 最終回答
+      </div>
+    </div>
+    <p>
+      ここで最も誤解されやすいのが <code>messages</code> の正体である。
+      これは画面に会話を描くための表示用データではない。
+      <strong>次の LLM 呼び出しに渡す入力そのもの</strong>である。
+      表示だけを考えると tool の行は邪魔に見えるが、LLM にとって tool 行は、
+      直前に自分が要求した function call への返答であり、省略できない。
+    </p>
+    <pre><code class="language-json">[
+  {
+    "role": "user",
+    "content": "未完了課題を教えて"
+  },
+  {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call_abc",
+        "type": "function",
+        "function": {
+          "name": "get_issues",
+          "arguments": "{\"statusId[]\":[1,2,3]}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_abc",
+    "content": "[{\"id\":42,\"summary\":\"資料を更新する\"}]"
+  },
+  {
+    "role": "assistant",
+    "content": "未完了の課題は 1 件です。資料を更新する。"
+  }
+]</code></pre>
+    <p>
+      2 行目の <code>tool_calls[0].id</code> と 3 行目の <code>tool_call_id</code> が
+      同じ <code>call_abc</code> であることに注目する。これが対応していないと、
+      LLM は「その結果がどの依頼に対するものか」を復元できない。
+      tool の結果だけを文字列として足し、assistant 行を残さない実装は、この対応を壊す。
+    </p>
+    <div class="why">
+      <strong>loop の不変条件</strong>
+      版が変わっても、次の五つは変わらない。v1 でも v2 でも、これが崩れていたら実装が間違っている。
+      <ul>
+        <li>LLM が返した assistant 行は、tool を実行する<strong>前に</strong> messages へ追加する</li>
+        <li>tool 行の <code>tool_call_id</code> は、対応する <code>assistant.tool_calls[i].id</code> と一致する</li>
+        <li>assistant が複数の tool を要求したら、その<strong>全て</strong>に tool 行を返す</li>
+        <li><code>tool_calls</code> を持たない assistant 応答が出たら、そこで loop を終える</li>
+        <li>実行した tool の総数には上限を設ける</li>
+      </ul>
+    </div>
+    <p>
+      最後の項目は、tool が連鎖すること自体を禁じるためのものではない。
+      期待しない loop が外部サービスを無限に呼び続けるのを、Host の責務として止めるためにある。
+      上限は assistant メッセージの数ではなく、実行した tool call の数で数える。
+    </p>
+
+    <h2 id="sessions">二種類のセッション</h2>
+    <p>
+      この教材では「セッション」という語が二つの意味で現れる。
+      同じものとして扱うと、永続化と再接続の設計が必ず破綻する。
+    </p>
+    <table>
+      <thead>
+        <tr><th>名前</th><th>何を保つか</th><th>寿命</th><th>v1</th><th>v2</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>MCP セッション</td>
+          <td>Streamable HTTP の接続と <code>initialize</code> 後のプロトコル状態</td>
+          <td>MCP に接続しているあいだ</td>
+          <td>あり</td>
+          <td>あり</td>
+        </tr>
+        <tr>
+          <td>Chat セッション</td>
+          <td>会話 ID と会話履歴</td>
+          <td>会話を再開したい期間</td>
+          <td>なし</td>
+          <td>あり（PostgreSQL）</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      v1 が「ステートレス」なのは Chat セッションを持たないという意味であり、
+      毎回の HTTP リクエストで MCP 接続を省くという意味ではない。
+      Chat セッションを持たない v1 にも MCP セッションは存在する。
+    </p>
+    <p>
+      逆に v2 でブラウザを再読み込みしたとき、Chat セッションが DB に残っていれば履歴は復元できる。
+      その事実から MCP 接続も再利用できるとは導けない。
+      Host は新しい MCP 接続を初期化し、DB から読み直した messages で会話を続ける。
+    </p>
+    <div class="note">
+      <strong>MCP 接続を tool 呼び出しごとに開き直さない</strong>
+      <code>ClientSession</code> は loop の外側で開き、最終回答が出るまで維持する。
+      tool ごとに張り直すと、<code>initialize</code> と <code>list_tools</code> を毎回繰り返すうえ、
+      接続に紐づく MCP 側の状態も追いにくくなる。
+    </div>
+
+    <h2 id="streams">二種類のストリーム</h2>
+    <p>
+      同じ混同が「ストリーム」にも起きる。こちらは v2 で効いてくる。
+    </p>
+    <table>
+      <thead>
+        <tr><th>名前</th><th>区間</th><th>運ぶもの</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Chat SSE</td>
+          <td>Host → Frontend</td>
+          <td>発言の進行。tool の開始と終了、最終回答のチャンク、終端イベント</td>
+        </tr>
+        <tr>
+          <td>MCP Streamable HTTP</td>
+          <td>Host → Backlog MCP</td>
+          <td>MCP の初期化、tool schema、tool 実行結果</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      両者はつながっていない。Chat SSE のイベント名を MCP サーバーへ送ることはないし、
+      MCP の応答をそのままブラウザへ中継することもない。
+      Host は MCP から受け取った結果を、利用者に見せる意味のある形へ translate してから SSE に載せる。
+    </p>
+
+    <h2 id="mcp-service">公式 Backlog MCP を HTTP で常駐させる</h2>
+    <p>
+      Backlog MCP はこのリポジトリで実装しない。Nulab が
+      <code>nulab/backlog-mcp-server</code> を公開しており、課題、Wiki、Git、通知の tool 面を
+      こちらで再発明する理由がない。学ぶ対象は Host の責務であって、Backlog API のラッパーではない。
+    </p>
+    <p>
+      公式サーバーの既定トランスポートは stdio だが、Streamable HTTP も持つ。
+      この教材は HTTP を選ぶ。stdio ではプロセスの寿命、再起動、標準入出力の監視まで Host が引き受けることになり、
+      学びたい境界とは別の複雑さが混ざるためである。
+      Compose 上の常駐サービスにすれば、CLI からも Host コンテナからも同じサーバーに接続でき、
+      MCP 側の障害を Host のバグと切り分けて調べられる。
+    </p>
+    <p>
+      各版の <code>compose.yaml</code> に置く <code>backlog-mcp</code> の定義は共通である。
+      版ごとに違うのは、同じ Compose に何を並べるか（v1 は Host だけ、v2 は Host と PostgreSQL）だけになる。
+    </p>
+    <pre><code class="language-yaml">  backlog-mcp:
+    image: ghcr.io/nulab/backlog-mcp-server:latest
+    environment:
+      BACKLOG_DOMAIN: ${BACKLOG_DOMAIN}
+      BACKLOG_API_KEY: ${BACKLOG_API_KEY}
+      NODE_ENV: development
+      MCP_TRANSPORT: http
+      MCP_HTTP_HOST: "0.0.0.0"
+      MCP_HTTP_PORT: "3333"
+      MCP_HTTP_PATH: /mcp
+      MCP_HTTP_ALLOWED_HOSTS: backlog-mcp,localhost,127.0.0.1
+    ports:
+      - "3333:3333"</code></pre>
+    <p>
+      <code>MCP_HTTP_HOST</code> の <code>0.0.0.0</code> は、コンテナの外から接続を受けるための bind 先である。
+      <code>MCP_HTTP_ALLOWED_HOSTS</code> には Compose 内のサービス名と、ローカル確認に使う host を含める。
+      <code>ports</code> は、Host を書く前にスモークを通すためにホストへ公開する設定であり、
+      Compose 内からしか使わなくなったら閉じてよい。
+    </p>
+    <div class="note">
+      <strong>この port を信頼できないネットワークへ出さない</strong>
+      Backlog MCP は、Backlog API キーでできる操作をそのまま代行する。
+      公開する範囲はローカル開発に限る。
+    </div>
+    <h3>Host を書く前にスモークを通す</h3>
+    <p>
+      起動ログを見て「動いていそうだ」で済ませない。MCP クライアントとして
+      <code>initialize</code> と <code>list_tools</code> を実行し、tool 名が返ることを確認する。
+      ここを先に固定しておくと、後で「課題が取れない」という失敗を Host のバグと混同しなくなる。
+    </p>
+    <pre><code class="language-bash">docker compose up -d backlog-mcp
+docker compose ps
+docker compose logs backlog-mcp</code></pre>
+    <pre><code class="language-python">import asyncio
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+
+async def smoke(url: str) -&gt; None:
+    async with streamable_http_client(url) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            listed = await session.list_tools()
+            print([tool.name for tool in listed.tools])
+
+
+asyncio.run(smoke("http://127.0.0.1:3333/mcp"))</code></pre>
+    <p>
+      ここで返る tool 名は、後で二箇所に効いてくる。
+      一つは LLM に渡す tool schema であり、もう一つは v2 で監査対象にする書き込み系 tool の集合である。
+      どちらも名前を推測で決めず、実際に <code>list_tools</code> が返した名前を使う。
+    </p>
+    <div class="note">
+      <strong>URL は接続元によって変わる</strong>
+      ホストの CLI から見る URL は <code>http://127.0.0.1:3333/mcp</code> だが、
+      Compose 内の Host コンテナから見る URL は <code>http://backlog-mcp:3333/mcp</code> である。
+      <code>localhost</code> は常に「いま実行している場所」を指すため、
+      コンテナ内で <code>localhost:3333</code> を使うと Backlog MCP ではなく Host 自身を見に行く。
+    </div>
+
+    <h2 id="sdk-level">MCP SDK のどの水準を使うか</h2>
+    <p>
+      公式 <code>mcp</code> Python SDK には、接続を扱う水準が二つある。
+      この教材は<strong>低い方を選ぶ</strong>。惰性ではなく、見せたいものがあるからである。
+    </p>
+    <pre><code class="language-python"># 高水準。URL 文字列を渡すと Streamable HTTP になり、initialize も内側で走る
+from mcp import Client
+
+async with Client(url) as client:
+    tools = await client.list_tools()
+
+
+# 低水準。この教材が使う形
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+async with streamable_http_client(url) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        tools = await session.list_tools()</code></pre>
+    <p>
+      高水準の <code>Client</code> は短く、実務ではこちらでよいことが多い。
+      それでも低水準を使うのは、<code>initialize</code> という往復が存在すること、
+      その後に <code>list_tools</code> が来ること、そしてこの接続がどこで開いてどこで閉じるかを、
+      コード上の位置として見せるためである。MCP セッションの寿命が
+      <code>async with</code> のネストとして目に見える形になる。
+    </p>
+    <div class="why">
+      <strong>これは決断であって、当て推量ではない</strong>
+      低水準 API を使う代償は、行数と、二重の <code>async with</code> の読みにくさである。
+      得るものは、接続と初期化を自分で並べたという事実だけだ。
+      その事実が要らなくなったら <code>Client</code> に移してよい。
+      移すときに何が隠れるかを説明できるなら、この教材の目的は達成されている。
+    </div>
+
+    <h2 id="environment">環境と秘密情報</h2>
+    <p>
+      必要なものは Python 3.12 以上、uv、Docker Compose、Node.js、pnpm である。
+      版はリポジトリ直下の <code>mise.toml</code> に固定してある。
+      加えて Backlog のドメインと API キー、OpenCode Go の API キーを用意する。
+    </p>
+    <p>
+      LLM は OpenCode Go の <code>deepseek-v4-flash</code> を既定とし、OpenAI 互換の
+      Chat Completions として <code>openai</code> SDK の <code>base_url</code> を差し替えて呼ぶ。
+    </p>
+    <table>
+      <thead>
+        <tr><th>環境変数</th><th>用途</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>BACKLOG_DOMAIN</code></td><td>Backlog スペース。<code>backlog-mcp</code> コンテナが使う</td></tr>
+        <tr><td><code>BACKLOG_API_KEY</code></td><td>Backlog API。<code>backlog-mcp</code> コンテナが使う</td></tr>
+        <tr><td><code>OPENCODE_GO_API_KEY</code></td><td>LLM の認証</td></tr>
+        <tr><td><code>OPENCODE_GO_BASE_URL</code></td><td>既定は <code>https://opencode.ai/zen/go/v1</code></td></tr>
+        <tr><td><code>OPENCODE_GO_MODEL</code></td><td>既定は <code>deepseek-v4-flash</code></td></tr>
+        <tr><td><code>MCP_SERVER_URL</code></td><td>Host から Backlog MCP への URL</td></tr>
+        <tr><td><code>LOG_FORMAT</code></td><td><code>human</code> または <code>json</code></td></tr>
+      </tbody>
+    </table>
+    <p>
+      v2 はこれに <code>DATABASE_URL</code>、<code>POSTGRES_PASSWORD</code>、
+      timeout と tool 上限の設定を足す。詳細は v2.html に置く。
+    </p>
+    <div class="note">
+      <strong>秘密情報の扱い</strong>
+      値はリポジトリ直下の <code>.envrc</code> を direnv で読み込む。版ごとの <code>.env</code> は必須にしない。
+      Compose は起動シェルに載った環境変数を参照する。
+      キーの値を、このガイド、コミット、Issue、PR、ログに書かない。扱うのは環境変数名だけにする。
+    </div>
+
+    <h2 id="next">次に読むもの</h2>
+    <p>
+      地図はここまでである。ここから先は手順になる。
+    </p>
+    <ul>
+      <li><a href="./v1.html">v1 学習書</a> — ステートレスな Host。tool loop を CLI で書き、FastAPI で包む</li>
+      <li><a href="./v2.html">v2 学習書</a> — 会話の永続化、SSE、制限と失敗の契約、監査。v1 を終えてから読む</li>
+    </ul>
+    <p>
+      この地図に戻ってくるのは、実装中に「いま自分はどちらのセッションの話をしているのか」が
+      分からなくなったときでよい。その混乱はほぼ必ず一度は起きる。
+    </p>
+  </main>
+
+  <footer>
+    <p>
+      backlog-mcp-sandbox 学習ガイド。
+      <a href="./index.html">共通の地図</a> ／
+      <a href="./v1.html">v1</a> ／
+      <a href="./v2.html">v2</a>
+    </p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+          integrity="sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"
+          integrity="sha384-aBQXj4hK6Jm05i7aQAsUV3bLdSUrHX1BGYfMB0166TtWt/RRaw+h0Eelme9OCOvy"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="./assets/guide.js"></script>
+</body>
+</html>

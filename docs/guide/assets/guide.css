@@ -1,0 +1,398 @@
+/* backlog-mcp-sandbox 学習ガイド 共通スタイル
+   index.html / v1.html / v2.html の 3 冊で共有する。
+   値をここ以外に置かない。冊ごとに上書きすると、以前のように 2 冊が別々に育つ。 */
+
+:root {
+  /* スクロールバーやフォーム部品など、ブラウザが描く部分も配色に追従させる。 */
+  color-scheme: light dark;
+
+  --bg: #f7f5f1;
+  --fg: #1c1b19;
+  --muted: #5c574f;
+  --card: #fffefb;
+  --line: #e4dfd4;
+  --accent: #0b5fff;
+  --code-bg: #f0ebe3;
+  --note-bg: #fff6e8;
+  --check-bg: #eef8f0;
+  --task-bg: #eef2ff;
+  --pre-bg: #0f1419;
+  --pre-fg: #f4f0e8;
+  --th-bg: #f3efe7;
+  --max: 48rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16150f;
+    --fg: #ece7dc;
+    --muted: #a49d8f;
+    --card: #1e1c15;
+    --line: #35322a;
+    --accent: #7fa9ff;
+    --code-bg: #262319;
+    --note-bg: #2a2313;
+    --check-bg: #16261a;
+    --task-bg: #1a1e2e;
+    --pre-bg: #0b0e12;
+    --th-bg: #262319;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  font-size: 16.5px;
+  line-height: 1.8;
+}
+
+header.hero .inner,
+main,
+footer {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding-right: 1.25rem;
+  padding-left: 1.25rem;
+}
+
+/* ---- ヘッダと版の切り替え ---- */
+
+header.hero {
+  padding: 2.8rem 0 2.2rem;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--card) 0%, var(--bg) 100%);
+}
+
+.eyebrow {
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+h1 {
+  margin: 0 0 0.8rem;
+  font-size: clamp(1.85rem, 6vw, 2.3rem);
+  line-height: 1.32;
+}
+
+.lede {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+nav.series {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+
+nav.series a {
+  display: inline-block;
+  padding: 0.28rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  text-decoration: none;
+}
+
+nav.series a:hover {
+  border-color: var(--accent);
+}
+
+nav.series a[aria-current="page"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--card);
+}
+
+/* ---- 見出しと本文 ---- */
+
+main {
+  padding-top: 1.7rem;
+  padding-bottom: 4rem;
+}
+
+h2 {
+  margin: 3.2rem 0 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+  font-size: 1.45rem;
+  line-height: 1.45;
+}
+
+h3 {
+  margin: 2.1rem 0 0.65rem;
+  font-size: 1.12rem;
+  line-height: 1.55;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+li {
+  margin: 0.28rem 0;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* 章ラベル。見出しの直前に独立ブロックとして置く。
+   OVERVIEW / STEP n / WRAP UP の 3 種類しか使わない。 */
+.label {
+  display: block;
+  margin: 3.2rem 0 -0.6rem;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.label + h2 {
+  margin-top: 0.6rem;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* ---- 目次 ---- */
+
+nav.toc {
+  margin: 0 0 2.5rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+nav.toc > strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+nav.toc ol {
+  margin: 0;
+  padding-left: 1.35rem;
+}
+
+nav.toc a {
+  text-decoration: none;
+}
+
+nav.toc a:hover {
+  text-decoration: underline;
+}
+
+nav.toc .kind {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* ---- コード ---- */
+
+code,
+kbd {
+  padding: 0.1em 0.34em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  margin: 1.1rem 0 1.35rem;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: var(--pre-bg);
+  color: var(--pre-fg);
+  font-size: 0.86rem;
+  line-height: 1.58;
+}
+
+pre code,
+pre code.hljs {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+/* ---- 囲み ---- */
+
+.note,
+.check,
+.why,
+.task {
+  margin: 1.25rem 0;
+  padding: 0.95rem 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.note {
+  background: var(--note-bg);
+}
+
+.check {
+  background: var(--check-bg);
+}
+
+.why {
+  background: var(--card);
+}
+
+/* 読者が自分で書く部分を示す囲み。ガイドが答えを出さない箇所に使う。 */
+.task {
+  border-color: var(--accent);
+  background: var(--task-bg);
+}
+
+.note > strong:first-child,
+.check > strong:first-child,
+.why > strong:first-child,
+.task > strong:first-child {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.note ul,
+.check ul,
+.why ul,
+.task ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
+/* ---- 表 ---- */
+
+table {
+  width: 100%;
+  margin: 1rem 0 1.35rem;
+  border-collapse: collapse;
+  background: var(--card);
+  font-size: 0.94rem;
+}
+
+th,
+td {
+  padding: 0.6rem 0.65rem;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--th-bg);
+}
+
+/* ---- 図 ---- */
+
+.diagram {
+  margin: 1.15rem 0 1.45rem;
+  padding: 1rem 0.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.diagram .mermaid {
+  display: flex;
+  justify-content: center;
+}
+
+/* mermaid の読み込みに失敗したとき、guide.js が付ける。
+   図が消えて意味が取れなくなるより、ソースが読める方がよい。 */
+.diagram .mermaid[data-fallback] {
+  display: block;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: var(--pre-bg);
+  color: var(--pre-fg);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: pre;
+}
+
+/* ---- フッタ ---- */
+
+footer {
+  padding-top: 1.5rem;
+  padding-bottom: 3rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* ---- 印刷 ---- */
+
+@media print {
+  /* 紙は常に白い。ダークモードのまま印刷して薄い文字が飛ばないよう、
+     一部だけでなく全トークンをライト側へ戻す。
+     この block は dark の block より後ろに置く。順序が効いている。 */
+  :root {
+    color-scheme: light;
+
+    --bg: #fff;
+    --fg: #111;
+    --muted: #555;
+    --card: #fff;
+    --line: #ddd;
+    --accent: #0b5fff;
+    --code-bg: #f4f4f4;
+    --note-bg: #fff;
+    --check-bg: #fff;
+    --task-bg: #fff;
+    --pre-bg: #f4f4f4;
+    --pre-fg: #111;
+    --th-bg: #f4f4f4;
+    --max: 100%;
+  }
+
+  body {
+    font-size: 10.5pt;
+  }
+
+  header.hero {
+    background: none;
+  }
+
+  nav.series,
+  nav.toc {
+    display: none;
+  }
+
+  h2 {
+    break-after: avoid;
+  }
+
+  pre,
+  table,
+  .diagram,
+  .note,
+  .check,
+  .why,
+  .task {
+    break-inside: avoid;
+  }
+
+  pre {
+    border: 1px solid #ddd;
+    white-space: pre-wrap;
+  }
+}

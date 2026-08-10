@@ -1,0 +1,15 @@
+[tools]
+node = "24.19.0"
+pnpm = "11.20.0"
+python = "3.12.13"
+uv = "0.12.2"
+xh = "0.26.2"
+
+[tasks.guide]
+description = "学習ガイドをローカル配信する（file:// では共通アセットが読めない）"
+dir = "docs"
+run = "python -m http.server 8080 --bind 127.0.0.1"
+
+[tasks.guide-check]
+description = "学習ガイドの内部リンクとローカル参照を検査する"
+run = "python scripts/check_guide_links.py"
