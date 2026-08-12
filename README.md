@@ -30,3 +30,14 @@ HTML なのは、mermaid の図と組版を伴う読み物として扱いたい�
 mise install          # node / pnpm / python / uv
 cd v1 && docker compose up
 ```
+
+### v3（自作 Backlog MCP）
+
+公式 MCP は使わず、OAuth 接続と課題一覧を自前の MCP が持つ。Chat API は `8003`、MCP は `3333`。
+
+```bash
+cd v3 && docker compose up
+cd v3/frontend && pnpm install && pnpm dev
+```
+
+検証 UI で `user_id` / `org_id` を入れ、「Backlog を接続」からスペースを追加してからチャットする。
