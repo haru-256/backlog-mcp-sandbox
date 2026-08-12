@@ -1,3 +1,11 @@
+/**
+ * IdentityBar の入力。
+ *
+ * @property userId - 表示中のユーザー ID
+ * @property orgId - 表示中のテナント ID
+ * @property onUserId - user_id 変更時
+ * @property onOrgId - org_id 変更時
+ */
 type Props = {
   userId: string;
   orgId: string;
@@ -5,6 +13,13 @@ type Props = {
   onOrgId: (value: string) => void;
 };
 
+/**
+ * デモ用の user_id / org_id 入力と、Backlog 接続リンクを出す。
+ *
+ * @param props - 現在の身元と変更ハンドラ
+ * @returns identity セクションの React 要素
+ * @throws なし
+ */
 export function IdentityBar({ userId, orgId, onUserId, onOrgId }: Props) {
   const apiBase = import.meta.env.VITE_API_BASE_URL;
   const canConnect = userId.trim().length > 0 && orgId.trim().length > 0;

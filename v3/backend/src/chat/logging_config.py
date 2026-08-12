@@ -17,10 +17,33 @@ HUMAN_FORMAT = (
 
 
 def _patch_record(record: Any) -> None:
+    """loguru の record に request_id が無ければ contextvar から補う。
+
+    Args:
+        record: loguru が渡すログレコード。
+
+    Returns:
+        なし。record をその場で更新する。
+
+    Raises:
+        なし。
+    """
     record["extra"].setdefault("request_id", request_id_var.get())
 
 
 def configure_logging(settings: Settings | None = None) -> LogFormat:
+    """loguru を LOG_FORMAT に応じて初期化する。
+
+    Args:
+        settings: 使う設定。省略時は環境変数から読む。
+
+    Returns:
+        適用したフォーマット。`human` または `json`。
+
+    Raises:
+        ValueError: LOG_FORMAT が human / json でない場合。
+        pydantic.ValidationError: settings 省略時に必須 env が無い場合。
+    """
     resolved = settings or Settings.from_env()
     log_format = resolved.log_format.lower()
 

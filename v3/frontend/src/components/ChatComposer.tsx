@@ -1,5 +1,13 @@
 import { useState, type FormEvent } from "react";
 
+/**
+ * ChatComposer の入力。
+ *
+ * @property pending - 送信中なら true。入力を無効化する
+ * @property onSend - 送信する本文。空や送信中は呼び出し側が無視してよい
+ * @property onClear - 会話履歴を捨てる
+ * @property hasMessages - 履歴があるとき true。clear ボタンの活性に使う
+ */
 type Props = {
   pending: boolean;
   onSend: (content: string) => Promise<void>;
@@ -7,9 +15,23 @@ type Props = {
   hasMessages: boolean;
 };
 
+/**
+ * メッセージ入力と送信 / clear。
+ *
+ * @param props - 送信状態とハンドラ
+ * @returns 入力フォームの React 要素
+ * @throws なし。onSend の失敗は呼び出し側が扱う
+ */
 export function ChatComposer({ pending, onSend, onClear, hasMessages }: Props) {
   const [draft, setDraft] = useState("");
 
+  /**
+   * フォーム送信を抑え、下書きを onSend に渡す。
+   *
+   * @param event - submit イベント
+   * @returns なし
+   * @throws onSend が送出した例外
+   */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = draft;

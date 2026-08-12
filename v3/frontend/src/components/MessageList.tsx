@@ -1,9 +1,21 @@
 import type { ChatMessage } from "../types";
 
+/**
+ * MessageList の入力。
+ *
+ * @property messages - tool 行を含む全履歴
+ */
 type Props = {
   messages: ChatMessage[];
 };
 
+/**
+ * 画面に出す本文だけを取り出す。tool 行は出さない。
+ *
+ * @param message - 1 行
+ * @returns user の本文、または assistant の本文。それ以外は null
+ * @throws なし
+ */
 function visibleText(message: ChatMessage): string | null {
   if (message.role === "user") {
     return message.content;
@@ -14,6 +26,13 @@ function visibleText(message: ChatMessage): string | null {
   return null;
 }
 
+/**
+ * user / assistant の本文だけを並べる。
+ *
+ * @param props - 会話履歴
+ * @returns 一覧、または空のときの案内
+ * @throws なし
+ */
 export function MessageList({ messages }: Props) {
   const visible = messages.flatMap((message, index) => {
     const text = visibleText(message);
