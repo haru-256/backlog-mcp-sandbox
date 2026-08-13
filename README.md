@@ -35,6 +35,8 @@ cd v1 && docker compose up
 
 公式 MCP は使わず、OAuth 接続と課題一覧を自前の MCP が持つ。Chat API は `8003`、MCP は `3333`。
 
+役割分担とシーケンスは [v3/README.md](v3/README.md) にある。
+
 ```bash
 cd v3 && docker compose up
 cd v3/frontend && pnpm install && pnpm dev
