@@ -579,7 +579,7 @@ async def test_list_issues_does_not_use_another_users_space() -&gt; None:
     <pre><code class="language-python">@server.tool()
 async def list_connected_spaces() -&gt; list[dict[str, str]]:
     """このユーザーが OAuth 接続した Backlog スペースを返す。"""
-    return list_connected_spaces_payload(memory, current_user_id())
+    return connected_spaces(memory, current_user_id())
 
 
 @server.tool()

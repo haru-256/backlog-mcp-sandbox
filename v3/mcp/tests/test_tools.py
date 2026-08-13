@@ -8,7 +8,7 @@ from backlog_mcp.tools import (
     NEED_SPACE,
     NOT_CONNECTED,
     UNKNOWN_SPACE,
-    list_connected_spaces_payload,
+    connected_spaces,
     list_issues_for_user,
 )
 
@@ -130,7 +130,7 @@ def test_put_space_app_once() -> None:
     assert app.client_id == "id2"
 
 
-def test_list_connected_spaces_payload() -> None:
+def test_connected_spaces() -> None:
     store = _store_with("alice", ["a.backlog.com", "b.backlog.com"])
-    listed = list_connected_spaces_payload(store, "alice")
+    listed = connected_spaces(store, "alice")
     assert [item["domain"] for item in listed] == ["a.backlog.com", "b.backlog.com"]

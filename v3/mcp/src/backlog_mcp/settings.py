@@ -1,3 +1,5 @@
+"""環境変数から読む MCP の設定。"""
+
 from typing import Literal, Self
 
 from pydantic import field_validator
@@ -7,6 +9,20 @@ LogFormat = Literal["human", "json"]
 
 
 class Settings(BaseSettings):
+    """Compose / シェルの環境変数。
+
+    Attributes:
+        mcp_jwt_secret: Host と同じ HMAC 秘密鍵。
+        mcp_public_url: ブラウザから見た MCP。Redirect URI と JWT の aud に使う。
+        host_public_url: Host の公開 URL。JWT の iss。
+        frontend_public_url: OAuth 完了後に戻す検証 UI。
+        host: bind 先。コンテナでは 0.0.0.0。
+        port: 待ち受けポート。既定 3333。
+        allowed_hosts: DNS rebinding 対策。Compose の Host ヘッダを含める。
+        allowed_origins: ブラウザ Origin の許可。
+        issue_limit: list_issues の件数上限。
+    """
+
     model_config = SettingsConfigDict(extra="ignore")
 
     mcp_jwt_secret: str
@@ -22,9 +38,14 @@ class Settings(BaseSettings):
     @field_validator("mcp_public_url", "host_public_url", "frontend_public_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, value: object) -> object:
+        """URL 末尾のスラッシュを除き、`/callback` を足したときに二重にならないようにする。"""
         if isinstance(value, str):
             return value.rstrip("/")
         return value
+
+    def oauth_redirect_uri(self) -> str:
+        """Backlog アプリに登録する Redirect URI と同じ文字列。"""
+        return f"{self.mcp_public_url}/callback"
 
     def allowed_host_list(self) -> list[str]:
         return [item.strip() for item in self.allowed_hosts.split(",") if item.strip()]
@@ -34,4 +55,9 @@ class Settings(BaseSettings):
 
     @classmethod
     def from_env(cls) -> Self:
+        """環境変数から Settings を読む。
+
+        Raises:
+            pydantic.ValidationError: 必須 env が無い、または値が不正な場合。
+        """
         return cls()  # type: ignore[call-arg]  # pyright: ignore[reportCallIssue]

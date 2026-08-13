@@ -59,6 +59,15 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+def test_health_does_not_need_jwt() -> None:
+    server = create_server(_settings(), store=MemoryStore(), api=FakeApi())
+    app = server.streamable_http_app(host="127.0.0.1")
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_connect_get_renders_form() -> None:
     store = MemoryStore()
     server = create_server(_settings(), store=store, api=FakeApi())

@@ -1,8 +1,27 @@
+"""MCP がメモリに持つ三つの表。再起動で消える。
+
+Host は Backlog の token を持たない。置き場はこのプロセスだけである。
+
++------------------+----------------------------------+
+| 表               | キー → 値                        |
++------------------+----------------------------------+
+| space_apps       | スペース → OAuth アプリ          |
+|                  | （client_id / secret。スペースに |
+|                  |  つき一度）                      |
+| connections      | (Chat ユーザー, スペース) →      |
+|                  | その人が同意した Backlog token   |
+| pending          | Backlog に渡した state →         |
+|                  | 認可が戻ってくるまでの仮データ   |
++------------------+----------------------------------+
+"""
+
 from dataclasses import dataclass
 
 
 @dataclass
 class SpaceApp:
+    """ある Backlog スペースに登録された OAuth アプリ。"""
+
     domain: str
     client_id: str
     client_secret: str
@@ -10,6 +29,8 @@ class SpaceApp:
 
 @dataclass
 class Connection:
+    """Chat ユーザーが、あるスペースへ OAuth したあとの接続。"""
+
     user_id: str
     org_id: str
     domain: str
@@ -19,13 +40,15 @@ class Connection:
 
 @dataclass
 class PendingOAuth:
+    """Backlog の同意画面に飛ばしている途中。callback で connections に変わる。"""
+
     user_id: str
     org_id: str
     domain: str
 
 
 class MemoryStore:
-    """スペースの OAuth アプリと、ユーザーごとの Backlog 接続をメモリに持つ。"""
+    """上の三表を dict で持つ。永続化はしない。"""
 
     def __init__(self) -> None:
         self.space_apps: dict[str, SpaceApp] = {}
@@ -42,7 +65,7 @@ class MemoryStore:
         self.connections[(connection.user_id, connection.domain)] = connection
 
     def list_connections(self, user_id: str) -> list[Connection]:
-        return [item for (uid, _), item in self.connections.items() if uid == user_id]
+        return [item for item in self.connections.values() if item.user_id == user_id]
 
     def get_connection(self, user_id: str, domain: str) -> Connection | None:
         return self.connections.get((user_id, domain))

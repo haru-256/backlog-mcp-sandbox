@@ -140,9 +140,9 @@ flowchart TB
 | [backend/src/chat/api.py](backend/src/chat/api.py) | HTTP の入口。接続は 302、チャットは JSON |
 | [backend/src/chat/agent.py](backend/src/chat/agent.py) | LLM ↔ tool loop。MCP セッションを開く |
 | [backend/src/chat/mcp_client.py](backend/src/chat/mcp_client.py) | `list_tools` / `call_tool` を OpenAI 形式に合わせる |
-| [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) | tool 登録と `/mcp` の起動 |
-| [mcp/src/backlog_mcp/connect.py](mcp/src/backlog_mcp/connect.py) | スペース入力と Backlog OAuth |
-| [mcp/src/backlog_mcp/store.py](mcp/src/backlog_mcp/store.py) | スペースの OAuth アプリと `(user, space) → token` |
+| [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) | 配線。`/mcp` の tool と `/health` |
+| [mcp/src/backlog_mcp/connect.py](mcp/src/backlog_mcp/connect.py) | `/connect` と `/callback`。チャット外の OAuth |
+| [mcp/src/backlog_mcp/store.py](mcp/src/backlog_mcp/store.py) | OAuth アプリ / 接続 / 認可途中の三表 |
 | [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) | 接続済みスペースの解決と課題一覧 |
 
 Host はスペース名も Backlog トークンも持たない。知っているのは `user_id` と `org_id` だけである。
@@ -279,8 +279,9 @@ cd v3/backend && uv run pytest
 
 1. [backend/src/chat/agent.py](backend/src/chat/agent.py) — Host の loop。MCP を知らなくても「LLM が tool を要求する」形が見える
 2. [backend/src/chat/mcp_client.py](backend/src/chat/mcp_client.py) — MCP の tool schema を LLM 向けに変換する薄い層
-3. [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) — Server が tool を登録する場所
-4. [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) — JWT のユーザーからスペースを解決する
+3. [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) — 入口が `/mcp` と `/connect` の二つであること
+4. [mcp/src/backlog_mcp/store.py](mcp/src/backlog_mcp/store.py) — OAuth アプリとユーザー token の置き場
 5. [mcp/src/backlog_mcp/connect.py](mcp/src/backlog_mcp/connect.py) — チャットと切り離した OAuth
+6. [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) — JWT のユーザーからスペースを解決する
 
 リポジトリ全体の地図は [docs/guide/index.html](../docs/guide/index.html) にある。手順は [docs/guide/v3.html](../docs/guide/v3.html) にある。v1 の Host を先に読むと、v3 で増えたのが Server 側だと対比しやすい。
