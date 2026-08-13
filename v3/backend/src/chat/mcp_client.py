@@ -14,9 +14,6 @@ class BacklogMCP:
 
         Args:
             session: MCP サーバーとの通信を行うセッション。
-
-        Raises:
-            なし。
         """
         self._session: ClientSession = session
 

@@ -29,9 +29,6 @@ def sign_token(
 
     Returns:
         署名済み JWT 文字列。
-
-    Raises:
-        なし。
     """
     now = int(time.time())
     payload: dict[str, Any] = {

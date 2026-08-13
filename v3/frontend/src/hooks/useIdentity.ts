@@ -16,9 +16,9 @@ export type Identity = {
 
 /**
  * user_id / org_id を localStorage と同期する。本格ログインではない。
+ * localStorage が使えない環境では setter 側が例外になり得る。
  *
  * @returns 現在の ID と setter。初回マウント前は空文字、その後 demo-user / demo-org または保存値
- * @throws なし。localStorage が使えない環境では setter 側が例外になり得る
  */
 export function useIdentity() {
   const [userId, setUserId] = useState("");

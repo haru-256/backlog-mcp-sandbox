@@ -33,9 +33,6 @@ class Settings(BaseSettings):
 
         Returns:
             文字列なら lower() した値。それ以外はそのまま。
-
-        Raises:
-            なし。不正値は型の Literal 検証で弾かれる。
         """
         if isinstance(value, str):
             return value.lower()
@@ -51,9 +48,6 @@ class Settings(BaseSettings):
 
         Returns:
             文字列なら rstrip("/") した値。それ以外はそのまま。
-
-        Raises:
-            なし。
         """
         if isinstance(value, str):
             return value.rstrip("/")

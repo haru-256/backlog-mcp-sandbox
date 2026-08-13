@@ -14,7 +14,6 @@ type Props = {
  *
  * @param message - 1 行
  * @returns user の本文、または assistant の本文。それ以外は null
- * @throws なし
  */
 function visibleText(message: ChatMessage): string | null {
   if (message.role === "user") {
@@ -31,7 +30,6 @@ function visibleText(message: ChatMessage): string | null {
  *
  * @param props - 会話履歴
  * @returns 一覧、または空のときの案内
- * @throws なし
  */
 export function MessageList({ messages }: Props) {
   const visible = messages.flatMap((message, index) => {

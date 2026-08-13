@@ -16,11 +16,10 @@ type Props = {
 };
 
 /**
- * メッセージ入力と送信 / clear。
+ * メッセージ入力と送信 / clear。onSend の失敗は呼び出し側が扱う。
  *
  * @param props - 送信状態とハンドラ
  * @returns 入力フォームの React 要素
- * @throws なし。onSend の失敗は呼び出し側が扱う
  */
 export function ChatComposer({ pending, onSend, onClear, hasMessages }: Props) {
   const [draft, setDraft] = useState("");
@@ -29,7 +28,6 @@ export function ChatComposer({ pending, onSend, onClear, hasMessages }: Props) {
    * フォーム送信を抑え、下書きを onSend に渡す。
    *
    * @param event - submit イベント
-   * @returns なし
    * @throws onSend が送出した例外
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

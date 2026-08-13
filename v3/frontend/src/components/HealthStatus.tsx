@@ -1,10 +1,9 @@
 import { useHealth } from "../hooks/useHealth";
 
 /**
- * Host `/health` の到達状況を一行で出す。
+ * Host `/health` の到達状況を一行で出す。到達失敗は "unreachable" と表示する。
  *
  * @returns ヘルス表示の React 要素
- * @throws なし。到達失敗は "unreachable" と表示する
  */
 export function HealthStatus() {
   const { data, error, isLoading } = useHealth();

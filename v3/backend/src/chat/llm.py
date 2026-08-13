@@ -19,9 +19,6 @@ class OpencodeGoLLM:
 
         Args:
             settings: API キー、base_url、モデル名。
-
-        Raises:
-            なし。
         """
         self._client: AsyncOpenAI = AsyncOpenAI(
             api_key=settings.opencode_go_api_key,
@@ -62,9 +59,6 @@ def _to_row(message: ChatCompletionMessage) -> ChatCompletionAssistantMessagePar
 
     Returns:
         role / content / tool_calls だけを持つ assistant 行。
-
-    Raises:
-        なし。
     """
     row: ChatCompletionAssistantMessageParam = {
         "role": "assistant",

@@ -122,9 +122,6 @@ async def health() -> HealthResponse:
 
     Returns:
         `ok` が True の JSON。
-
-    Raises:
-        なし。
     """
     return HealthResponse(ok=True)
 

@@ -37,9 +37,6 @@ def _plain_messages(
 
     Returns:
         JSON 往復したあとのプレーンな messages。呼び出し元の配列は変更しない。
-
-    Raises:
-        なし。
     """
     return cast(
         list[ChatCompletionMessageParam],
@@ -110,9 +107,6 @@ def mcp_bearer_token(settings: Settings, user_id: str, org_id: str) -> str:
 
     Returns:
         HS256 で署名した JWT 文字列。
-
-    Raises:
-        なし。
     """
     return sign_token(
         secret=settings.mcp_jwt_secret,

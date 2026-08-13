@@ -21,12 +21,6 @@ def _patch_record(record: Any) -> None:
 
     Args:
         record: loguru が渡すログレコード。
-
-    Returns:
-        なし。record をその場で更新する。
-
-    Raises:
-        なし。
     """
     record["extra"].setdefault("request_id", request_id_var.get())
 

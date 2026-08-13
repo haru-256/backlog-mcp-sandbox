@@ -8,7 +8,6 @@ import type { ChatMessage } from "../types";
  *
  * @param error - catch した値
  * @returns Error なら message。それ以外は固定の日本語メッセージ
- * @throws なし
  */
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -18,12 +17,11 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * クライアント側で会話履歴を持ち、Chat API に全件を送り直す。
+ * クライアント側で会話履歴を持ち、Chat API に全件を送り直す。API 失敗は error 文字列に載せる。
  *
  * @param userId - Chat 上のユーザー ID
  * @param orgId - Chat テナント ID
  * @returns messages / pending / error と、send / clear
- * @throws なし。API 失敗は error 文字列に載せる
  */
 export function useChat(userId: string, orgId: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

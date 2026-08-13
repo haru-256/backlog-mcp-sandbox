@@ -18,7 +18,6 @@ type Props = {
  *
  * @param props - 現在の身元と変更ハンドラ
  * @returns identity セクションの React 要素
- * @throws なし
  */
 export function IdentityBar({ userId, orgId, onUserId, onOrgId }: Props) {
   const apiBase = import.meta.env.VITE_API_BASE_URL;

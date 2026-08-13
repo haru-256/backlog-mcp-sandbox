@@ -14,7 +14,6 @@ type Props = {
  *
  * @param props - 会話履歴
  * @returns details 要素
- * @throws なし
  */
 export function MessagesDebug({ messages }: Props) {
   return (
