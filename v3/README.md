@@ -283,4 +283,4 @@ cd v3/backend && uv run pytest
 4. [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) — JWT のユーザーからスペースを解決する
 5. [mcp/src/backlog_mcp/connect.py](mcp/src/backlog_mcp/connect.py) — チャットと切り離した OAuth
 
-リポジトリ全体の地図は [docs/guide/index.html](../docs/guide/index.html) にある。v1 の Host を先に読むと、v3 で増えたのが Server 側だと対比しやすい。
+リポジトリ全体の地図は [docs/guide/index.html](../docs/guide/index.html) にある。手順は [docs/guide/v3.html](../docs/guide/v3.html) にある。v1 の Host を先に読むと、v3 で増えたのが Server 側だと対比しやすい。

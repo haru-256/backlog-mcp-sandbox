@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>v3 学習書: 自作 Backlog MCP</title>
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css"
+        integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="./assets/guide.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="inner">
+      <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
+      <h1>v3 学習書<br />自作 Backlog MCP。接続はチャットの外</h1>
+      <p class="lede">
+        v1 で書いた Host の loop は変わらない。変わるのは、向かい側の Server である。
+        公式 MCP を外し、複数ユーザー・複数スペースのトークンを一つのプロセスに置く。
+        接続は tool の途中では始まらない。
+      </p>
+      <nav class="series" aria-label="この教材の構成">
+        <a href="./index.html">共通の地図</a>
+        <a href="./v1.html">v1 ステートレス Host</a>
+        <a href="./v2.html">v2 セッションと SSE</a>
+        <a href="./v3.html" aria-current="page">v3 自作 MCP</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="目次">
+      <strong>目次</strong>
+      <ol>
+        <li><span class="kind">OVERVIEW</span> <a href="#what">v3 で達成すること</a></li>
+        <li><span class="kind">STEP 1</span> <a href="#server">自前の MCP を HTTP で常駐させる</a></li>
+        <li><span class="kind">STEP 2</span> <a href="#jwt">身元は Host が JWT で渡す</a></li>
+        <li><span class="kind">STEP 3</span> <a href="#connect">接続はチャットの外</a></li>
+        <li><span class="kind">STEP 4</span> <a href="#tools">スペースを解決して課題を返す</a></li>
+        <li><span class="kind">STEP 5</span> <a href="#host">Host に user と接続入口を足す</a></li>
+        <li><span class="kind">STEP 6</span> <a href="#frontend">検証用フロント</a></li>
+        <li><span class="kind">WRAP UP</span> <a href="#end">到達点を確かめる</a></li>
+      </ol>
+    </nav>
+
+    <div class="note">
+      <strong>この文書は v1 を終えていることを前提にする</strong>
+      tool loop の不変条件、Host / Client / Server、MCP を HTTP で常駐させる理由は
+      <a href="./index.html">共通の地図</a> にある。
+      <code>run_tool_loop</code> を自分で書き、テストを緑にした経験は
+      <a href="./v1.html">v1 学習書</a> にある。ここではどちらも説明し直さない。
+      v3 のコードは v1 から import せず、新しく書く。ただし Host の loop の理解は引き継ぐ。
+      v2 のセッションや SSE は前提にしない。
+    </div>
+
+    <span class="label">OVERVIEW</span>
+    <h2 id="what">v3 で達成すること</h2>
+    <p>
+      v1 の Server は公式コンテナだった。API キーはスペースにつき一つ、プロセスにつき一つである。
+      公式 OAuth も 1 サーバー = 1 組織である。Chat の製品として複数テナントを一つの MCP に載せたいとき、
+      この前提が壊れる。v3 は Server を自分で書き、トークンの置き場を設計し直す。
+    </p>
+    <p>
+      目的は Backlog 製品を完成させることではない。次の問いに、コードで答えられるようにすることである。
+    </p>
+    <ul>
+      <li>MCP の Host / Client / Server は、どのプロセスのどのファイルか</li>
+      <li>LLM は Backlog API を直接呼ばない。なぜ tool を経由するのか</li>
+      <li>「接続」と「チャット」は、なぜ別の流れなのか</li>
+      <li>1 つの MCP が複数ユーザー・複数スペースを持つとき、トークンはどこに置くのか</li>
+    </ul>
+    <table>
+      <thead>
+        <tr><th>観点</th><th>v1</th><th>v3</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>MCP Server</td><td>公式イメージ。API キーはプロセスに一つ</td><td>自前。ユーザーとスペースの組ごとに token</td></tr>
+        <tr><td>Chat の履歴</td><td>クライアントが毎回 messages を送る</td><td>同じ（ステートレス）</td></tr>
+        <tr><td>Host が知るもの</td><td>MCP の URL</td><td>加えて <code>user_id</code> / <code>org_id</code>。スペース名は知らない</td></tr>
+        <tr><td>接続</td><td>Compose の環境変数</td><td>チャット外のボタン → OAuth</td></tr>
+        <tr><td>tool</td><td>公式の課題・Wiki・Git など</td><td><code>list_connected_spaces</code> と <code>list_issues</code> だけ</td></tr>
+      </tbody>
+    </table>
+
+    <h3>API</h3>
+    <table>
+      <thead>
+        <tr><th>プロセス</th><th>メソッド</th><th>パス</th><th>意味</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Host</td><td><code>POST</code></td><td><code>/chat</code></td><td>messages と user / org を受け、loop を回す</td></tr>
+        <tr><td>Host</td><td><code>GET</code></td><td><code>/backlog/connect</code></td><td>MCP の接続画面へ 302。チャットからは呼ばない</td></tr>
+        <tr><td>Host</td><td><code>GET</code></td><td><code>/health</code></td><td>プロセスが応答できることを示す</td></tr>
+        <tr><td>MCP</td><td>—</td><td><code>/mcp</code></td><td>Streamable HTTP。Bearer JWT 必須</td></tr>
+        <tr><td>MCP</td><td><code>GET</code> / <code>POST</code></td><td><code>/connect</code></td><td>スペース入力と Backlog OAuth への 302</td></tr>
+        <tr><td>MCP</td><td><code>GET</code></td><td><code>/callback</code></td><td>認可コードを token に交換する</td></tr>
+        <tr><td>MCP</td><td><code>GET</code></td><td><code>/health</code></td><td>認証なし。Compose の healthcheck 用</td></tr>
+      </tbody>
+    </table>
+
+    <h3>v3 に入れないもの</h3>
+    <p>
+      PostgreSQL、Chat セッション、SSE、Cursor 向けの Dynamic Client Registration、
+      課題の作成や更新は入れない。永続化はメモリのみで、再起動すると接続は消える。
+      省いたものは未完成の印ではなく、Server 側の身元と接続の境界を読むための余白である。
+    </p>
+
+    <h3>置き場</h3>
+    <pre><code class="language-plaintext">v3/
+├── compose.yaml   # mcp + api（v3 専用。公式イメージは使わない）
+├── mcp/           # MCP Server。接続 UI + OAuth + tools
+├── backend/       # Host。v1 型の loop に JWT を足す
+└── frontend/      # 検証用 React。Compose には載せない</code></pre>
+    <p>
+      ポートは MCP が <code>3333</code>、Host が <code>8003</code>、検証 UI が <code>5173</code> である。
+      v1 の Host は <code>8001</code> のまま残す。同時に起動してもぶつからない。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart TB
+  subgraph fe [frontend]
+    App[App.tsx]
+    Identity[IdentityBar.tsx]
+    ChatHook[useChat.ts]
+  end
+
+  subgraph host [backend]
+    Api[api.py]
+    Agent[agent.py]
+    JwtHost[jwt_tokens.py]
+    McpClient[mcp_client.py]
+  end
+
+  subgraph server [mcp]
+    Srv[server.py]
+    Connect[connect.py]
+    Auth[auth.py]
+    Tools[tools.py]
+    Store[store.py]
+  end
+
+  App --> Identity
+  App --> ChatHook
+  Identity -->|"GET /backlog/connect"| Api
+  ChatHook -->|"POST /chat"| Api
+  Api --> Agent
+  Agent --> JwtHost
+  Agent --> McpClient
+  McpClient -->|"Bearer JWT /mcp"| Srv
+  Api -->|"302 /connect"| Connect
+  Srv --> Auth
+  Srv --> Tools
+  Connect --> Store
+  Tools --> Store
+      </div>
+    </div>
+
+    <span class="label">STEP 1</span>
+    <h2 id="server">自前の MCP を HTTP で常駐させる</h2>
+    <p>
+      v1 では公式イメージを Compose に置いた。v3 ではその位置を <code>v3/mcp</code> が占める。
+      トランスポートの判断は同じである。stdio で都度起動せず、Streamable HTTP で常駐させる。
+      理由は <a href="./index.html#mcp-service">共通の地図</a> にある。
+    </p>
+    <p>
+      SDK は公式 <code>mcp</code> の 2.x を使う。<code>MCPServer</code> であり、
+      古い記事の FastMCP や Prefect のラッパーではない。
+      <code>custom_route</code> は認証を通さない。接続画面と health をここに載せる。
+      <code>/mcp</code> だけが <code>token_verifier</code> を通る。
+    </p>
+    <pre><code class="language-yaml">name: backlog-mcp-sandbox-v3
+
+services:
+  mcp:
+    build: ./mcp
+    environment:
+      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-change-me-please!!}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:3333}
+      HOST_PUBLIC_URL: ${HOST_PUBLIC_URL:-http://localhost:8003}
+      FRONTEND_PUBLIC_URL: ${FRONTEND_PUBLIC_URL:-http://localhost:5173}
+      ALLOWED_HOSTS: mcp,mcp:3333,localhost,127.0.0.1,localhost:3333,127.0.0.1:3333
+    ports:
+      - "3333:3333"</code></pre>
+    <p>
+      <code>ALLOWED_HOSTS</code> に <code>mcp:3333</code> を含める。
+      Docker の Host ヘッダはサービス名だけとは限らず、ポート付きで届くことがある。
+      DNS rebinding 保護を入れたまま、Compose 内の Host から届く値を許す。
+    </p>
+    <pre><code class="language-python"># mcp/src/backlog_mcp/server.py
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+
+
+def create_server(settings: Settings) -&gt; MCPServer[None]:
+    server = MCPServer(
+        name="backlog-mcp",
+        instructions="Backlog 課題を、接続済みスペースに対して一覧する。",
+    )
+
+    @server.custom_route("/health", methods=["GET"])
+    async def health(_request: Request) -&gt; Response:
+        return JSONResponse({"ok": True})
+
+    return server
+
+
+def run() -&gt; None:
+    settings = Settings.from_env()
+    server = create_server(settings)
+    server.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=3333,
+        streamable_http_path="/mcp",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=settings.allowed_host_list(),
+            allowed_origins=settings.allowed_origin_list(),
+        ),
+    )</code></pre>
+    <div class="note">
+      <strong>この時点では <code>/mcp</code> のスモークを急がない</strong>
+      v1 の公式 MCP は API キーだけで <code>list_tools</code> できた。
+      v3 の <code>/mcp</code> は STEP 2 で JWT を付けてから開く。
+      先に通すのは認証なしの <code>GET /health</code> である。
+    </div>
+    <pre><code class="language-bash">cd v3 &amp;&amp; docker compose up mcp
+curl -sS http://127.0.0.1:3333/health</code></pre>
+    <div class="check">
+      <strong>STEP 1 の合格線</strong>
+      自前イメージが <code>3333</code> で応答し、<code>{"ok": true}</code> が返る。
+      公式 <code>ghcr.io/nulab/backlog-mcp-server</code> は Compose に無い。
+    </div>
+
+    <span class="label">STEP 2</span>
+    <h2 id="jwt">身元は Host が JWT で渡す</h2>
+    <p>
+      公式 MCP はプロセスに API キーを一つ持つ。誰が呼んでも同じスペースになる。
+      v3 は一人の MCP が複数ユーザーを扱う。tool を実行するとき、
+      「いまの呼び出しは誰か」が Server に届いていなければならない。
+    </p>
+    <p>
+      その身元はブラウザが MCP に直接渡すのではない。Chat のテナントは Host が知っている。
+      Host が HS256 の JWT を署名し、MCP が同じ秘密鍵で検証する。
+      クライアントは自前 Host だけである。Cursor 向けの Dynamic Client Registration は実装しない。
+    </p>
+    <p>
+      JWT は二種類ある。同じ秘密鍵でも、<code>typ</code> が違う。取り違えると接続画面から tool が呼べてしまう。
+    </p>
+    <table>
+      <thead>
+        <tr><th></th><th><code>typ=connect</code></th><th><code>typ=mcp</code></th></tr>
+      </thead>
+      <tbody>
+        <tr><td>いつ発行するか</td><td>接続ボタン</td><td>毎回のチャット</td></tr>
+        <tr><td>どこへ付けるか</td><td><code>/connect?state=</code></td><td><code>/mcp</code> の Bearer</td></tr>
+        <tr><td><code>aud</code></td><td>付けない</td><td>MCP の公開 URL</td></tr>
+        <tr><td><code>iss</code></td><td>Host の公開 URL</td><td>Host の公開 URL</td></tr>
+        <tr><td><code>sub</code> / <code>org</code></td><td>user_id / org_id</td><td>同じ</td></tr>
+      </tbody>
+    </table>
+    <pre><code class="language-plaintext">ブラウザ  --connect JWT--&gt;  MCP /connect   --Backlog OAuth--&gt;  そのスペースの token
+Host     --mcp JWT------&gt;  MCP /mcp       --保存済み token--&gt;  Backlog API</code></pre>
+    <p>
+      検証は SDK の <code>token_verifier</code> に載せる。成功したら <code>AccessToken.subject</code> がユーザーになる。
+      tool 本体は JWT を自分でデコードしない。<code>get_access_token()</code> から subject を取る。
+    </p>
+    <pre><code class="language-python"># mcp/src/backlog_mcp/auth.py
+from mcp.server.auth.provider import AccessToken
+
+from .jwt_tokens import TokenError, decode_token
+
+
+class HostJwtVerifier:
+    def __init__(self, secret: str, audience: str, issuer: str) -&gt; None:
+        self._secret = secret
+        self._audience = audience
+        self._issuer = issuer
+
+    async def verify_token(self, token: str) -&gt; AccessToken | None:
+        try:
+            payload = decode_token(
+                token,
+                self._secret,
+                "mcp",
+                audience=self._audience,
+                issuer=self._issuer,
+            )
+        except TokenError:
+            return None
+        return AccessToken(
+            token=token,
+            client_id="chat-host",
+            scopes=["mcp"],
+            subject=payload["sub"],
+            claims={"org": payload["org"]},
+        )</code></pre>
+    <p>
+      <code>MCPServer</code> に渡すときは <code>AuthSettings(required_scopes=["mcp"])</code> を付ける。
+      <code>connect</code> トークンでは <code>/mcp</code> を開けない。
+    </p>
+    <div class="why">
+      <strong>Host と MCP が同じ秘密鍵を持つ理由</strong>
+      これは第一者の Host だけがクライアントだから成立する。
+      不特定の IDE から繋ぐ設計にすると、秘密鍵の共有は破綻する。
+      そのときは Dynamic Client Registration や第三者の認可サーバーが必要になる。
+      v3 はその問題を解かない。解かないと決めたから、JWT の発行と検証を自分のコードとして読める。
+    </div>
+    <div class="check">
+      <strong>STEP 2 の合格線</strong>
+      <code>typ=mcp</code> の JWT で <code>initialize</code> と <code>list_tools</code> が通る。
+      <code>typ=connect</code> や改ざんした token では <code>/mcp</code> が拒否する。
+      <code>/health</code> と <code>/connect</code> は Bearer なしで届く。
+    </div>
+
+    <span class="label">STEP 3</span>
+    <h2 id="connect">接続はチャットの外</h2>
+    <p>
+      「未完了課題を教えて」の途中で OAuth を始めてはならない。
+      tool の結果に接続 URL を載せると、LLM がそれを会話の一部として扱い、
+      別ユーザーの画面にリンクが出たり、チャットから認可が始まったりする。
+      接続は明示的なボタンだけから入る。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+sequenceDiagram
+  participant User
+  participant FE as frontend
+  participant Host as backend_api
+  participant MCP as mcp_connect
+  participant Backlog
+
+  User->>FE: Backlog を接続
+  FE->>Host: GET /backlog/connect user_id org_id
+  Host->>Host: connect 用 JWT を署名
+  Host->>MCP: 302 /connect?state=JWT
+  User->>MCP: スペースを入力
+  Note over MCP: 未登録なら client_id/secret も保存
+  MCP->>Backlog: 302 OAuth2AccessRequest
+  User->>Backlog: 同意
+  Backlog->>MCP: GET /callback?code
+  MCP->>Backlog: code を token に交換
+  MCP->>MCP: connections に user と space を保存
+  MCP->>FE: 302 ?connected=1
+      </div>
+    </div>
+    <p>
+      MCP が覚える表は二つある。どちらもメモリであり、再起動で消える。
+    </p>
+    <ol>
+      <li><code>space_apps</code> — その Backlog スペースの OAuth アプリ。スペースにつき一度</li>
+      <li><code>connections</code> — <code>(user_id, domain) → Backlog access token</code></li>
+    </ol>
+    <p>
+      初めてそのスペースを繋ぐ人は、Backlog に作った OAuth アプリの
+      <code>client_id</code> / <code>client_secret</code> も貼る。
+      二人目からはスペース名と Backlog ログインだけで足りる。
+      2 本目のスペースも、同じボタンから同じ <code>/connect</code> に入る。
+      チャットの tool には <code>connect</code> を置かない。
+    </p>
+    <pre><code class="language-python"># mcp/src/backlog_mcp/store.py
+from dataclasses import dataclass
+
+
+@dataclass
+class SpaceApp:
+    domain: str
+    client_id: str
+    client_secret: str
+
+
+@dataclass
+class Connection:
+    user_id: str
+    org_id: str
+    domain: str
+    access_token: str
+    refresh_token: str | None = None
+
+
+@dataclass
+class PendingOAuth:
+    user_id: str
+    org_id: str
+    domain: str
+
+
+class MemoryStore:
+    def __init__(self) -&gt; None:
+        self.space_apps: dict[str, SpaceApp] = {}
+        self.connections: dict[tuple[str, str], Connection] = {}
+        self.pending: dict[str, PendingOAuth] = {}</code></pre>
+    <p>
+      接続画面は <code>custom_route</code> に載せる。ここは JWT の Bearer を要求しない。
+      代わりに query の <code>state</code> を <code>typ=connect</code> として検証する。
+      Host を経由せず <code>/connect</code> を直接開いても、署名が無ければフォームは出ない。
+    </p>
+    <div class="note">
+      <strong>Chat の org と Backlog のスペースは別物</strong>
+      Host が知るのは Chat テナントの <code>org_id</code> である。ユーザーと org は 1:1。
+      Backlog のスペースドメインは MCP だけが知る。1 ユーザーが複数スペースを接続できる。
+      tool 引数に <code>organization</code> は置かない。<code>space</code> は Backlog のホスト名である。
+    </div>
+    <p>
+      callback は認可コードを token に交換し、<code>connections</code> へ書く。
+      終わったら検証 UI へ 302 する。URL に access token を載せない。
+      この層のテストは実 Backlog を叩かない。偽の API が <code>exchange_code</code> を返す。
+    </p>
+    <div class="check">
+      <strong>STEP 3 の合格線</strong>
+      接続用 JWT 付きの <code>GET /connect</code> がフォームを返す。
+      未登録スペースで client を省略すると 400。
+      callback が <code>(user_id, domain)</code> の接続をメモリに残し、フロントへ <code>connected=1</code> で戻る。
+    </div>
+
+    <span class="label">STEP 4</span>
+    <h2 id="tools">スペースを解決して課題を返す</h2>
+    <p>
+      ここが v3 の中心である。Host はスペース名を知らない。
+      JWT の <code>sub</code> からユーザーを特定し、その人が接続したスペースだけを見る。
+      tool は二つだけにする。
+    </p>
+    <table>
+      <thead>
+        <tr><th>tool</th><th>すること</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>list_connected_spaces</code></td><td>そのユーザーが OAuth したスペースを返す</td></tr>
+        <tr><td><code>list_issues</code></td><td>指定スペースの課題を返す。未完了相当（status 1, 2, 3）がデフォルト</td></tr>
+      </tbody>
+    </table>
+    <p>
+      <code>list_issues</code> の <code>space</code> は省略できる場合とできない場合がある。
+      この分岐を間違えると、他人のスペースが見えたり、接続 URL が会話に混ざったりする。
+    </p>
+    <div class="why">
+      <strong>未接続のときに URL を返さない</strong>
+      tool は日本語で「画面の接続ボタンから接続してください」と返す。
+      リンクを付けない。LLM は受け取った文字列を利用者へ中継するだけなので、
+      ここに URL を置くと、チャットが OAuth の入口になってしまう。
+    </div>
+
+    <h3>入力の正規化（全文を渡す）</h3>
+    <p>
+      利用者は <code>acme</code> と書くことも、<code>https://acme.backlog.jp/projects/FOO</code> と書くこともある。
+      比較する前にホスト名へ落とす。これは URL の雑務なので全文を渡す。
+    </p>
+    <pre><code class="language-python"># mcp/src/backlog_mcp/space.py
+from urllib.parse import urlparse
+
+
+def normalize_space_domain(raw: str) -&gt; str:
+    """ユーザー入力を Backlog のホスト名に正規化する。"""
+    text = raw.strip()
+    if not text:
+        raise ValueError("space is required")
+    if "://" not in text:
+        text = f"https://{text}"
+    parsed = urlparse(text)
+    host = (parsed.netloc or parsed.path).split("/")[0].lower()
+    if not host:
+        raise ValueError("space is required")
+    if "." not in host:
+        host = f"{host}.backlog.com"
+    return host</code></pre>
+
+    <h3>解決と list_issues</h3>
+    <div class="task">
+      <strong>ここはあなたが書く</strong>
+      ガイドが渡すのは、シグネチャと不変条件と、通すべきテストだけである。
+      この分岐を写経で通過すると、v3 の目的は達成されない。
+    </div>
+    <pre><code class="language-python"># mcp/src/backlog_mcp/space.py（つづき）
+
+def resolve_space(connected: list[str], requested: str | None) -&gt; str | None:
+    """list_issues の space 引数を、接続済み一覧から解決する。
+
+    不変条件:
+      - requested があり、connected に含まれるならその domain を返す
+      - requested があり、含まれないなら None
+      - requested が無く、connected がちょうど 1 件ならそれを返す
+      - それ以外（0 件、2 件以上で省略）は None
+      - 呼び出し側が connected の長さを見てメッセージを分ける
+    """
+    raise NotImplementedError("ここを書く")</code></pre>
+    <pre><code class="language-python"># mcp/src/backlog_mcp/tools.py
+NOT_CONNECTED = "Backlog は未接続です。画面の接続ボタンから接続してください。"
+NEED_SPACE = (
+    "複数のスペースが接続されています。list_connected_spaces で確認し、space を指定してください。"
+)
+UNKNOWN_SPACE = "指定されたスペースはこのユーザーの接続にありません。"
+
+
+async def list_issues_for_user(
+    store: MemoryStore,
+    api: BacklogApi,
+    user_id: str,
+    *,
+    space: str | None,
+    status_id: int | None,
+    count: int,
+) -&gt; str:
+    """そのユーザーの接続からスペースを決め、課題の JSON 文字列を返す。
+
+    不変条件:
+      - 接続 0 本なら NOT_CONNECTED。URL を含めない
+      - 他人のスペース、未所持、不正な space は UNKNOWN_SPACE
+      - 2 本以上で space 省略なら NEED_SPACE。どれか一つを勝手に選ばない
+      - 1 本なら space 省略可
+      - Backlog を呼ぶのは、解決できた domain の、その user の token だけ
+    """
+    raise NotImplementedError("ここを書く")</code></pre>
+
+    <h3>自分で通すテスト</h3>
+    <p>
+      書けたかどうかは、実 Backlog に問い合わせて目視するのではない。
+      偽の API が決まった課題を返し、ストアに接続を置く。
+    </p>
+    <pre><code class="language-python"># mcp/tests/test_tools.py
+def test_resolve_single_space_without_argument() -&gt; None:
+    assert resolve_space(["a.backlog.com"], None) == "a.backlog.com"
+
+
+def test_resolve_two_spaces_requires_argument() -&gt; None:
+    assert resolve_space(["a.backlog.com", "b.backlog.com"], None) is None
+    assert resolve_space(["a.backlog.com", "b.backlog.com"], "b.backlog.com") == "b.backlog.com"
+
+
+@pytest.mark.anyio
+async def test_list_issues_zero_connections() -&gt; None:
+    text = await list_issues_for_user(
+        MemoryStore(), FakeBacklog(), "alice", space=None, status_id=None, count=20
+    )
+    assert text == NOT_CONNECTED
+    assert "http" not in text
+
+
+@pytest.mark.anyio
+async def test_list_issues_one_connection_omits_space() -&gt; None:
+    store = _store_with("alice", ["acme.backlog.com"])
+    api = FakeBacklog()
+    text = await list_issues_for_user(store, api, "alice", space=None, status_id=None, count=20)
+    assert "A-1" in text
+    assert api.calls == [("acme.backlog.com", "tok-acme.backlog.com")]
+
+
+@pytest.mark.anyio
+async def test_list_issues_two_connections_require_space() -&gt; None:
+    store = _store_with("alice", ["a.backlog.com", "b.backlog.com"])
+    text = await list_issues_for_user(
+        store, FakeBacklog(), "alice", space=None, status_id=None, count=20
+    )
+    assert text == NEED_SPACE
+
+
+@pytest.mark.anyio
+async def test_list_issues_rejects_foreign_space() -&gt; None:
+    store = _store_with("alice", ["a.backlog.com"])
+    text = await list_issues_for_user(
+        store, FakeBacklog(), "alice", space="other.backlog.com", status_id=None, count=20
+    )
+    assert text == UNKNOWN_SPACE
+
+
+@pytest.mark.anyio
+async def test_list_issues_does_not_use_another_users_space() -&gt; None:
+    store = _store_with("bob", ["a.backlog.com"])
+    store.put_connection(
+        Connection(user_id="alice", org_id="org-1", domain="b.backlog.com", access_token="tok-b")
+    )
+    text = await list_issues_for_user(
+        store, FakeBacklog(), "alice", space="a.backlog.com", status_id=None, count=20
+    )
+    assert text == UNKNOWN_SPACE</code></pre>
+    <p>
+      tool の登録は薄い。JWT のユーザーを取り、上の関数へ渡すだけである。
+    </p>
+    <pre><code class="language-python">@server.tool()
+async def list_connected_spaces() -&gt; list[dict[str, str]]:
+    """このユーザーが OAuth 接続した Backlog スペースを返す。"""
+    return list_connected_spaces_payload(memory, current_user_id())
+
+
+@server.tool()
+async def list_issues(space: str | None = None, status_id: int | None = None) -&gt; str:
+    """接続済みスペースの課題を一覧する。未完了相当がデフォルト。
+
+    接続が 2 本以上あるときは space（例: acme.backlog.com）が必須。
+    未接続なら、画面の接続ボタンから接続するよう案内する（URL は返さない）。
+    """
+    return await list_issues_for_user(
+        memory,
+        backlog,
+        current_user_id(),
+        space=space,
+        status_id=status_id,
+        count=settings.issue_limit,
+    )</code></pre>
+    <div class="check">
+      <strong>STEP 4 の合格線</strong>
+      上のテストが、実 Backlog なしで緑になる。
+      未接続の文字列に URL が含まれない。
+      bob のスペースを alice の <code>space</code> に書いても拒否される。
+    </div>
+
+    <span class="label">STEP 5</span>
+    <h2 id="host">Host に user と接続入口を足す</h2>
+    <p>
+      Host の loop は <a href="./v1.html#loop">v1</a> と同じである。
+      足すのは、MCP を開くときに JWT を付けることと、接続ボタンの 302 だけである。
+      スペース名も Backlog トークンも Host は持たない。
+    </p>
+    <pre><code class="language-python"># backend/src/chat/agent.py
+async def open_mcp_session(
+    settings: Settings, user_id: str, org_id: str
+) -&gt; AsyncIterator[ClientSession]:
+    token = mcp_bearer_token(settings, user_id, org_id)
+    async with (
+        create_mcp_http_client(headers={"Authorization": f"Bearer {token}"}) as http_client,
+        streamable_http_client(settings.mcp_server_url, http_client=http_client) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        yield session</code></pre>
+    <p>
+      <code>mcp</code> 2.x の <code>streamable_http_client</code> は <code>http_client=</code> で
+      既存の HTTP クライアントを受け取る。ここに Authorization を載せる。
+      v1 のように URL 文字列だけ渡すと、Bearer が付かない。
+    </p>
+    <pre><code class="language-python"># backend/src/chat/api.py
+@app.post("/chat")
+async def chat(request: ChatRequest) -&gt; ChatResponse:
+    messages = await run_agent(
+        list(request.messages), settings, request.user_id, request.org_id
+    )
+    return ChatResponse(message=messages[-1], messages=messages)
+
+
+@app.get("/backlog/connect")
+async def backlog_connect(
+    user_id: str = Query(min_length=1),
+    org_id: str = Query(min_length=1),
+) -&gt; RedirectResponse:
+    state = sign_token(
+        secret=settings.mcp_jwt_secret,
+        typ="connect",
+        user_id=user_id,
+        org_id=org_id,
+        issuer=settings.host_public_url,
+        ttl_seconds=settings.connect_token_ttl_seconds,
+    )
+    query = urlencode({"state": state})
+    return RedirectResponse(f"{settings.mcp_public_url}/connect?{query}", status_code=302)</code></pre>
+    <p>
+      <code>POST /chat</code> の本体は v1 と同じ同期 JSON である。
+      違うのは <code>user_id</code> と <code>org_id</code> が必須になったことだけである。
+      接続は axios では叩かない。ブラウザのトップレベル GET で 302 を辿らせる。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+sequenceDiagram
+  participant User
+  participant FE as frontend
+  participant Host as agent.py
+  participant LLM
+  participant MCP as mcp_server
+  participant Backlog
+
+  User->>FE: 未完了課題を教えて
+  FE->>Host: POST /chat messages user_id org_id
+  Host->>Host: typ=mcp の JWT を署名
+  Host->>MCP: Streamable HTTP /mcp Bearer
+  Host->>MCP: tools/list
+  MCP-->>Host: list_connected_spaces, list_issues
+  Host->>LLM: messages と tool schemas
+  LLM-->>Host: tool_call list_issues
+  Host->>MCP: tools/call list_issues
+  MCP->>MCP: JWT の sub で user を特定
+  MCP->>Backlog: GET /api/v2/issues
+  Backlog-->>MCP: issues
+  MCP-->>Host: JSON 文字列
+  Host->>LLM: tool 結果を messages に足す
+  LLM-->>Host: 最終テキスト
+  Host-->>FE: assistant 行
+      </div>
+    </div>
+    <div class="check">
+      <strong>STEP 5 の合格線</strong>
+      <code>GET /backlog/connect</code> の Location に <code>typ=connect</code> の JWT が載る。
+      <code>run_agent</code> が開く MCP セッションの Bearer は <code>typ=mcp</code> で、
+      <code>sub</code> が引数の <code>user_id</code> と一致する。実 MCP なしで検証できる。
+    </div>
+
+    <span class="label">STEP 6</span>
+    <h2 id="frontend">検証用フロント</h2>
+    <p>
+      v1 の画面に、身元入力と接続リンクを足す。チャットの送信はこれまでどおり axios でよい。
+      接続だけは <code>&lt;a href&gt;</code> のフルページ遷移にする。
+      axios で <code>/backlog/connect</code> を呼ぶと、302 先の HTML が JSON クライアントに飲まれる。
+    </p>
+    <pre><code class="language-typescript">const apiBase = import.meta.env.VITE_API_BASE_URL;
+const connectHref = `${apiBase}/backlog/connect?user_id=${encodeURIComponent(userId)}&amp;org_id=${encodeURIComponent(orgId)}`;
+
+&lt;a href={connectHref}&gt;Backlog を接続 / スペースを追加&lt;/a&gt;</code></pre>
+    <p>
+      <code>POST /chat</code> には毎回 <code>user_id</code> と <code>org_id</code> を付ける。
+      サーバーは履歴を持たないので、messages はクライアントが保持する。v1 と同じである。
+    </p>
+    <pre><code class="language-typescript">export async function postChat(
+  messages: ChatMessage[],
+  userId: string,
+  orgId: string,
+): Promise&lt;ChatResponse&gt; {
+  const { data } = await api.post&lt;ChatResponse&gt;("/chat", {
+    messages,
+    user_id: userId,
+    org_id: orgId,
+  });
+  return data;
+}</code></pre>
+    <p>
+      起動は Host / MCP を Compose で上げ、フロントだけローカルで動かす。
+    </p>
+    <pre><code class="language-bash">cd v3 &amp;&amp; docker compose up
+cd v3/frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev</code></pre>
+    <div class="check">
+      <strong>STEP 6 の合格線</strong>
+      検証 UI で user / org を入れ、接続ボタンからスペースを追加できる。
+      未接続のまま「未完了課題を教えて」と送ると、URL の無い案内が返る。
+      接続後は課題の要約が見える。チャットから OAuth は始まらない。
+    </div>
+
+    <span class="label">WRAP UP</span>
+    <h2 id="end">到達点を確かめる</h2>
+    <p>
+      v3 の完成は、画面に課題が出たことではない。次を観測できることである。
+    </p>
+    <ul>
+      <li>公式イメージではなく、自前の MCP が Compose 上で HTTP 常駐している</li>
+      <li><code>/health</code> は認証なし、<code>/mcp</code> は <code>typ=mcp</code> の JWT だけを受け付ける</li>
+      <li>接続は <code>GET /backlog/connect</code> → MCP の HTML → Backlog OAuth であり、tool 結果に URL が無い</li>
+      <li><code>space_apps</code> と <code>connections</code> が MCP のメモリにあり、Host は token を持たない</li>
+      <li>接続 0 / 1 / 2 本以上の分岐と、他人のスペース拒否が、実 Backlog なしのテストで緑になる</li>
+      <li>Host の <code>run_tool_loop</code> は v1 と同じ不変条件を保ったまま、Bearer 付きで MCP を開く</li>
+      <li>検証 UI の接続はフルページ GET で、チャット POST とは別の入口である</li>
+    </ul>
+    <p>
+      ここまで追えれば、Host が「いつ tool を呼ぶか」を決め、Server が「誰のどのスペースか」を決める、
+      と説明できる。同じ MCP という語でも、v1 の公式コンテナと v3 の自前プロセスでは、
+      トークンの置き場が違う。その違いをファイルの位置として指せるようになれば、
+      永続化や書き込み tool を足すときも、どのプロセスへ置くべきかを自分で判断できる。
+    </p>
+    <p>
+      Host 側で履歴と SSE を引き取る話は <a href="./v2.html">v2 学習書</a> にある。
+      v2 と v3 は同じ軸ではない。必要ならどちらから読んでもよい。
+    </p>
+  </main>
+
+  <footer>
+    <p>
+      backlog-mcp-sandbox 学習ガイド。
+      <a href="./index.html">共通の地図</a> ／
+      <a href="./v1.html">v1</a> ／
+      <a href="./v2.html">v2</a> ／
+      <a href="./v3.html">v3</a>
+    </p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+          integrity="sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"
+          integrity="sha384-aBQXj4hK6Jm05i7aQAsUV3bLdSUrHX1BGYfMB0166TtWt/RRaw+h0Eelme9OCOvy"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="./assets/guide.js"></script>
+</body>
+</html>

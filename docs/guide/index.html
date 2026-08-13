@@ -16,13 +16,15 @@
       <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
       <h1>共通の地図<br />Backlog MCP Host を自分で作る</h1>
       <p class="lede">
-        v1 と v2 が共有する原理をここに置く。tool loop とは何か、なぜ MCP を HTTP で常駐させるのか、
-        「セッション」と「ストリーム」がどちらも二つあるのはなぜか。手順に入る前に、この地図を読む。
+        v1・v2・v3 が共有する原理をここに置く。tool loop とは何か、Host / Client / Server はどのプロセスか、
+        なぜ MCP を HTTP で常駐させるのか、「セッション」と「ストリーム」がどちらも二つあるのはなぜか。
+        手順に入る前に、この地図を読む。
       </p>
       <nav class="series" aria-label="この教材の構成">
         <a href="./index.html" aria-current="page">共通の地図</a>
         <a href="./v1.html">v1 ステートレス Host</a>
         <a href="./v2.html">v2 セッションと SSE</a>
+        <a href="./v3.html">v3 自作 MCP</a>
       </nav>
     </div>
   </header>
@@ -33,6 +35,7 @@
       <ol>
         <li><a href="#about">この教材の読み方</a></li>
         <li><a href="#why-host">なぜ自前の MCP Host を書くのか</a></li>
+        <li><a href="#roles">Host / Client / Server</a></li>
         <li><a href="#loop">tool loop の原理</a></li>
         <li><a href="#sessions">二種類のセッション</a></li>
         <li><a href="#streams">二種類のストリーム</a></li>
@@ -52,16 +55,19 @@
       なぜその messages の並びでなければならないかを説明できることになる。
     </p>
     <p>
-      教材は二段に分かれる。<strong>v1</strong> はステートレスな Host で、tool loop だけを扱う。
-      <strong>v2</strong> は最終成果物で、会話の永続化、SSE、制限と失敗の契約、監査を足す。
-      v1 と v2 は<strong>コードを共有しない</strong>独立したアプリケーションである。
-      共通ライブラリにまとめると、二つの実装を並べて差分を読むという学習手段が失われるためである。
+      教材は三段に分かれる。<strong>v1</strong> はステートレスな Host で、tool loop だけを扱う。
+      公式 Backlog MCP を外から使う。<strong>v2</strong> は Host の責務を増やす。
+      会話の永続化、SSE、制限と失敗の契約、監査。公式 MCP は v1 と同じである。
+      <strong>v3</strong> は Server 側を自分で書く。Host の loop は v1 と同じ形のまま、公式 MCP を外す。
+      三つの版は<strong>コードを共有しない</strong>独立したアプリケーションである。
+      共通ライブラリにまとめると、実装を並べて差分を読むという学習手段が失われるためである。
     </p>
     <p>
       一方でこの文書は共有する。原理は版によって変わらないからだ。
-      v1.html と v2.html には、その版でしか意味を持たない手順だけを置く。
-      読む順序は index、v1、v2 とする。v2.html は v1 を終えていることを前提に書かれており、
-      tool loop を最初から説明し直さない。
+      各版の HTML には、その版でしか意味を持たない手順だけを置く。
+      読む順序は index、v1 のあと、<a href="./v2.html">v2</a> と <a href="./v3.html">v3</a> はどちらでもよい。
+      v2 は Host を厚くする軸、v3 は Server を書く軸である。
+      どちらも v1 を終えていることを前提にし、tool loop を最初から説明し直さない。
     </p>
     <div class="note">
       <strong>ガイドが答えを出さない箇所がある</strong>
@@ -107,6 +113,68 @@
       loop の不変条件を理解した後なら、抽象化を採用しても何が隠れたのかを判断できる。
       その判断力を先に作る、という順序の話である。
     </div>
+
+    <h2 id="roles">Host / Client / Server</h2>
+    <p>
+      MCP は HTTP の「クライアントとサーバー」に加え、<strong>Host</strong> という第三の役割を置く。
+      三つの語をプロセスと取り違えると、v3 で Server を書いたときに「じゃあ Host は要らなくなるのか」と迷う。
+      要らなくならない。役割が違うからである。
+    </p>
+    <table>
+      <thead>
+        <tr><th>役割</th><th>このリポジトリでの実体</th><th>仕事</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Host</td>
+          <td>各版の <code>backend/</code>（Chat API）</td>
+          <td>ユーザー発話を受け、LLM と MCP Client を回す。tool をいつ呼ぶかは LLM が決める</td>
+        </tr>
+        <tr>
+          <td>Client</td>
+          <td>Host プロセス内の MCP SDK</td>
+          <td>Host の一部。MCP Server に <code>tools/list</code> と <code>tools/call</code> を送る</td>
+        </tr>
+        <tr>
+          <td>Server</td>
+          <td>v1 / v2 は公式コンテナ。v3 は <code>mcp/</code></td>
+          <td>tool の定義と実行。ここでは Backlog の操作</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart LR
+  User[User]
+  FE[Frontend]
+  Host[Host_Chat_API]
+  LLM[LLM]
+  Client[MCP_Client]
+  Server[MCP_Server]
+  Backlog[Backlog_API]
+
+  User --> FE
+  FE --> Host
+  Host --> LLM
+  Host --> Client
+  Client --> Server
+  Server --> Backlog
+      </div>
+    </div>
+    <p>
+      押さえる点は三つある。版が変わっても、この三つは変わらない。
+    </p>
+    <ul>
+      <li><strong>LLM は MCP を知らない。</strong> Host が tool schema を OpenAI 形式に直し、LLM に渡す。</li>
+      <li><strong>LLM は Backlog を知らない。</strong> 「課題を取れ」と tool 名を返すだけである。実行するのは Server。</li>
+      <li><strong>Server は会話を持たない。</strong> チャットの履歴は Host（と、v1 / v3 では検証 UI）側にある。</li>
+    </ul>
+    <p>
+      v1 と v2 では Server が公式イメージである。学ぶ対象は Host の責務であって、Backlog API のラッパーではない。
+      v3 で Server を自分で書くのは、公式 OAuth が 1 サーバー = 1 組織だからである。
+      複数テナントを一つのプロセスで持つには、接続とトークンの置き場を Server 側に設計し直す必要がある。
+      手順は <a href="./v3.html">v3 学習書</a> に置く。
+    </p>
 
     <h2 id="loop">tool loop の原理</h2>
     <p>
@@ -174,7 +242,7 @@ sequenceDiagram
     </p>
     <div class="why">
       <strong>loop の不変条件</strong>
-      版が変わっても、次の五つは変わらない。v1 でも v2 でも、これが崩れていたら実装が間違っている。
+      版が変わっても、次の五つは変わらない。v1 でも v2 でも v3 でも、これが崩れていたら実装が間違っている。
       <ul>
         <li>LLM が返した assistant 行は、tool を実行する<strong>前に</strong> messages へ追加する</li>
         <li>tool 行の <code>tool_call_id</code> は、対応する <code>assistant.tool_calls[i].id</code> と一致する</li>
@@ -196,13 +264,14 @@ sequenceDiagram
     </p>
     <table>
       <thead>
-        <tr><th>名前</th><th>何を保つか</th><th>寿命</th><th>v1</th><th>v2</th></tr>
+        <tr><th>名前</th><th>何を保つか</th><th>寿命</th><th>v1</th><th>v2</th><th>v3</th></tr>
       </thead>
       <tbody>
         <tr>
           <td>MCP セッション</td>
           <td>Streamable HTTP の接続と <code>initialize</code> 後のプロトコル状態</td>
           <td>MCP に接続しているあいだ</td>
+          <td>あり</td>
           <td>あり</td>
           <td>あり</td>
         </tr>
@@ -212,6 +281,7 @@ sequenceDiagram
           <td>会話を再開したい期間</td>
           <td>なし</td>
           <td>あり（PostgreSQL）</td>
+          <td>なし</td>
         </tr>
       </tbody>
     </table>
@@ -219,6 +289,8 @@ sequenceDiagram
       v1 が「ステートレス」なのは Chat セッションを持たないという意味であり、
       毎回の HTTP リクエストで MCP 接続を省くという意味ではない。
       Chat セッションを持たない v1 にも MCP セッションは存在する。
+      v3 の Chat も v1 と同じくステートレスである。増えるのは Chat セッションではなく、
+      MCP Server がメモリに持つ Backlog 接続である。詳細は <a href="./v3.html">v3 学習書</a> に置く。
     </p>
     <p>
       逆に v2 でブラウザを再読み込みしたとき、Chat セッションが DB に残っていれば履歴は復元できる。
@@ -261,9 +333,15 @@ sequenceDiagram
 
     <h2 id="mcp-service">公式 Backlog MCP を HTTP で常駐させる</h2>
     <p>
-      Backlog MCP はこのリポジトリで実装しない。Nulab が
+      v1 と v2 では Backlog MCP をこのリポジトリで実装しない。Nulab が
       <code>nulab/backlog-mcp-server</code> を公開しており、課題、Wiki、Git、通知の tool 面を
       こちらで再発明する理由がない。学ぶ対象は Host の責務であって、Backlog API のラッパーではない。
+    </p>
+    <p>
+      v3 は例外である。公式 OAuth が 1 サーバー = 1 組織であるため、
+      複数テナントを一つのプロセスで持つには Server を自分で書く。
+      手順は <a href="./v3.html">v3 学習書</a> に置く。
+      ここでは v1 / v2 が使う公式コンテナの定義だけを示す。
     </p>
     <p>
       公式サーバーの既定トランスポートは stdio だが、Streamable HTTP も持つ。
@@ -273,8 +351,9 @@ sequenceDiagram
       MCP 側の障害を Host のバグと切り分けて調べられる。
     </p>
     <p>
-      各版の <code>compose.yaml</code> に置く <code>backlog-mcp</code> の定義は共通である。
+      各版の <code>compose.yaml</code> に置く <code>backlog-mcp</code> の定義は、v1 と v2 で共通である。
       版ごとに違うのは、同じ Compose に何を並べるか（v1 は Host だけ、v2 は Host と PostgreSQL）だけになる。
+      v3 の Compose は公式イメージを使わず、自前の <code>mcp</code> サービスをビルドする。
     </p>
     <pre><code class="language-yaml">  backlog-mcp:
     image: ghcr.io/nulab/backlog-mcp-server:latest
@@ -399,6 +478,9 @@ async with streamable_http_client(url) as (read, write):
     <p>
       v2 はこれに <code>DATABASE_URL</code>、<code>POSTGRES_PASSWORD</code>、
       timeout と tool 上限の設定を足す。詳細は v2.html に置く。
+      v3 は <code>BACKLOG_DOMAIN</code> / <code>BACKLOG_API_KEY</code> を使わない。
+      代わりに <code>MCP_JWT_SECRET</code>、<code>MCP_PUBLIC_URL</code>、<code>HOST_PUBLIC_URL</code>、
+      <code>FRONTEND_PUBLIC_URL</code> を使う。詳細は v3.html に置く。
     </p>
     <div class="note">
       <strong>秘密情報の扱い</strong>
@@ -414,6 +496,7 @@ async with streamable_http_client(url) as (read, write):
     <ul>
       <li><a href="./v1.html">v1 学習書</a> — ステートレスな Host。tool loop を CLI で書き、FastAPI で包む</li>
       <li><a href="./v2.html">v2 学習書</a> — 会話の永続化、SSE、制限と失敗の契約、監査。v1 を終えてから読む</li>
+      <li><a href="./v3.html">v3 学習書</a> — 自作 MCP Server。明示接続と複数スペース。v1 を終えてから読む</li>
     </ul>
     <p>
       この地図に戻ってくるのは、実装中に「いま自分はどちらのセッションの話をしているのか」が
@@ -426,7 +509,8 @@ async with streamable_http_client(url) as (read, write):
       backlog-mcp-sandbox 学習ガイド。
       <a href="./index.html">共通の地図</a> ／
       <a href="./v1.html">v1</a> ／
-      <a href="./v2.html">v2</a>
+      <a href="./v2.html">v2</a> ／
+      <a href="./v3.html">v3</a>
     </p>
   </footer>
 
