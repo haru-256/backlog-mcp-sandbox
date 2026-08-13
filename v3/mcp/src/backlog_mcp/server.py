@@ -33,6 +33,9 @@ def create_server(
         settings: JWT と公開 URL。
         store: 省略時は空のメモリ。
         api: 省略時は実 Backlog HTTP。
+
+    Returns:
+        `/mcp`・`/connect`・`/health` を持つ MCPServer。
     """
     memory = store or MemoryStore()
     backlog = api or HttpxBacklogApi()
@@ -55,6 +58,7 @@ def create_server(
 
     @server.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> Response:
+        """プロセスが応答できることを返す。JWT は見ない。"""
         return JSONResponse({"ok": True})
 
     @server.tool()
@@ -83,7 +87,14 @@ def create_server(
 
 
 def transport_security(settings: Settings) -> TransportSecuritySettings:
-    """Docker の Host ヘッダ（`mcp:3333` など）を許可する。"""
+    """Docker の Host ヘッダ（`mcp:3333` など）を許可する。
+
+    Args:
+        settings: `allowed_hosts` と `allowed_origins` を含む設定。
+
+    Returns:
+        Streamable HTTP に渡す DNS rebinding 対策。
+    """
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=settings.allowed_host_list(),
@@ -92,7 +103,11 @@ def transport_security(settings: Settings) -> TransportSecuritySettings:
 
 
 def run() -> None:
-    """Streamable HTTP で `/mcp` を待受ける。stdio では起動しない。"""
+    """Streamable HTTP で `/mcp` を待受ける。stdio では起動しない。
+
+    Raises:
+        pydantic.ValidationError: 必須 env が無い場合。
+    """
     settings = Settings.from_env()
     server = create_server(settings)
     server.run(

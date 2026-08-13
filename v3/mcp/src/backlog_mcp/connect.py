@@ -29,7 +29,18 @@ _INVALID_STATE = "接続用の state が無効です。Chat の接続ボタン�
 
 
 def _connect_claims(state: str, settings: Settings) -> dict[str, Any]:
-    """Host が接続ボタン用に署名した JWT を検証する。"""
+    """Host が接続ボタン用に署名した JWT を検証する。
+
+    Args:
+        state: `/connect?state=` または hidden field の JWT。
+        settings: 秘密鍵と Host の公開 URL。
+
+    Returns:
+        `sub`（user_id）と `org`（org_id）を含む claims。
+
+    Raises:
+        TokenError: 署名・期限・typ が合わない場合。
+    """
     return decode_token(state, settings.mcp_jwt_secret, "connect", issuer=settings.host_public_url)
 
 
@@ -39,23 +50,41 @@ def register_connect_routes(
     store: MemoryStore,
     api: BacklogApi,
 ) -> None:
-    """`/connect` と `/callback` を MCP プロセスに載せる。`/health` は server.py。"""
+    """`/connect` と `/callback` を MCP プロセスに載せる。`/health` は server.py。
+
+    Args:
+        server: ルートを足す MCPServer。
+        settings: Redirect URI と JWT 検証に使う設定。
+        store: OAuth アプリと接続の表。
+        api: 認可コードを token に換える Backlog クライアント。
+    """
 
     @server.custom_route("/connect", methods=["GET"])
     async def connect_get(request: Request) -> Response:
+        """GET /connect。処理は handle_connect_get。"""
         return await handle_connect_get(request, settings)
 
     @server.custom_route("/connect", methods=["POST"])
     async def connect_post(request: Request) -> Response:
+        """POST /connect。処理は handle_connect_post。"""
         return await handle_connect_post(request, settings, store)
 
     @server.custom_route("/callback", methods=["GET"])
     async def callback(request: Request) -> Response:
+        """GET /callback。処理は handle_callback。"""
         return await handle_callback(request, settings, store, api)
 
 
 async def handle_connect_get(request: Request, settings: Settings) -> Response:
-    """接続ボタンからの到着。フォームを出す。"""
+    """接続ボタンからの到着。フォームを出す。
+
+    Args:
+        request: `state` query を持つ GET。
+        settings: connect JWT の検証に使う設定。
+
+    Returns:
+        フォーム、または state が無効ならエラー HTML。
+    """
     state = request.query_params.get("state") or ""
     try:
         payload = _connect_claims(state, settings)
@@ -69,7 +98,16 @@ async def handle_connect_post(
     settings: Settings,
     store: MemoryStore,
 ) -> Response:
-    """フォーム送信。未登録スペースなら OAuth アプリを覚え、Backlog へ飛ばす。"""
+    """フォーム送信。未登録スペースなら OAuth アプリを覚え、Backlog へ飛ばす。
+
+    Args:
+        request: space と、未登録時は client_id / client_secret を含む POST。
+        settings: Redirect URI と JWT 検証。
+        store: アプリと pending の表。
+
+    Returns:
+        Backlog 同意画面への 302。入力不足ならフォームを 400 で返す。
+    """
     form = await request.form()
     state = str(form.get("state") or "")
     try:
@@ -110,7 +148,17 @@ async def handle_callback(
     store: MemoryStore,
     api: BacklogApi,
 ) -> Response:
-    """Backlog から戻る。code を token に換え、検証 UI へ戻す。token は URL に載せない。"""
+    """Backlog から戻る。code を token に換え、検証 UI へ戻す。token は URL に載せない。
+
+    Args:
+        request: `code` と `state` を持つ GET。拒否時は `error`。
+        settings: Redirect URI とフロントの URL。
+        store: pending を取り出し、connections に書く表。
+        api: token 交換。
+
+    Returns:
+        検証 UI への 302。失敗ならエラー HTML。
+    """
     error = request.query_params.get("error")
     if error:
         return error_page(f"Backlog の認可が拒否されました: {error}")

@@ -38,24 +38,48 @@ class Settings(BaseSettings):
     @field_validator("mcp_public_url", "host_public_url", "frontend_public_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, value: object) -> object:
-        """URL 末尾のスラッシュを除き、`/callback` を足したときに二重にならないようにする。"""
+        """URL 末尾のスラッシュを除き、`/callback` を足したときに二重にならないようにする。
+
+        Args:
+            value: 環境変数の生の値。
+
+        Returns:
+            文字列なら rstrip("/") した値。それ以外はそのまま。
+        """
         if isinstance(value, str):
             return value.rstrip("/")
         return value
 
     def oauth_redirect_uri(self) -> str:
-        """Backlog アプリに登録する Redirect URI と同じ文字列。"""
+        """Backlog アプリに登録する Redirect URI と同じ文字列。
+
+        Returns:
+            `{mcp_public_url}/callback`。既定は `http://localhost:3333/callback`。
+        """
         return f"{self.mcp_public_url}/callback"
 
     def allowed_host_list(self) -> list[str]:
+        """DNS rebinding 対策で許す Host ヘッダ。
+
+        Returns:
+            カンマ区切り `allowed_hosts` を分割したリスト。
+        """
         return [item.strip() for item in self.allowed_hosts.split(",") if item.strip()]
 
     def allowed_origin_list(self) -> list[str]:
+        """許すブラウザ Origin。
+
+        Returns:
+            カンマ区切り `allowed_origins` を分割したリスト。
+        """
         return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
 
     @classmethod
     def from_env(cls) -> Self:
         """環境変数から Settings を読む。
+
+        Returns:
+            必須フィールドを env から埋めた Settings。
 
         Raises:
             pydantic.ValidationError: 必須 env が無い、または値が不正な場合。

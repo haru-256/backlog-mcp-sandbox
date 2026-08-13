@@ -37,7 +37,17 @@ CONNECT_FORM = """<!doctype html>
 
 
 def connect_form(org: str, user: str, state: str, error: str | None = None) -> HTMLResponse:
-    """スペース入力フォーム。エラー時は 400 で同じ画面を返す。"""
+    """スペース入力フォーム。エラー時は 400 で同じ画面を返す。
+
+    Args:
+        org: Chat テナント ID。画面に表示する。
+        user: Chat ユーザー ID。画面に表示する。
+        state: 次の POST に載せる connect JWT。
+        error: あればアラートとして出す。
+
+    Returns:
+        フォーム HTML。error があれば status 400。
+    """
     error_html = f'<p role="alert">{escape(error)}</p>' if error else ""
     body = CONNECT_FORM.format(
         org=escape(org),
@@ -49,7 +59,15 @@ def connect_form(org: str, user: str, state: str, error: str | None = None) -> H
 
 
 def error_page(message: str, status: int = 400) -> HTMLResponse:
-    """フォームに戻せないときの短いエラー。"""
+    """フォームに戻せないときの短いエラー。
+
+    Args:
+        message: 画面に出す文。
+        status: HTTP status。既定は 400。
+
+    Returns:
+        一文だけの HTML。
+    """
     return HTMLResponse(
         f"<!doctype html><html lang='ja'><body><p>{escape(message)}</p></body></html>",
         status_code=status,

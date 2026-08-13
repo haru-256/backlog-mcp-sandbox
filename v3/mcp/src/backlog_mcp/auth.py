@@ -14,6 +14,13 @@ class HostJwtVerifier:
     """SDK が `/mcp` の Bearer を渡してきたとき、typ=mcp だけを通す。"""
 
     def __init__(self, secret: str, audience: str, issuer: str) -> None:
+        """検証に使う値を覚える。
+
+        Args:
+            secret: Host と同じ HMAC 秘密鍵。
+            audience: JWT の `aud`。MCP の公開 URL。
+            issuer: JWT の `iss`。Host の公開 URL。
+        """
         self._secret = secret
         self._audience = audience
         self._issuer = issuer
@@ -50,6 +57,9 @@ class HostJwtVerifier:
 
 def current_user_id() -> str:
     """いまの `/mcp` 呼び出しの Chat ユーザー ID。JWT の `sub`。
+
+    Returns:
+        Host が JWT に載せた user_id。
 
     Raises:
         RuntimeError: Bearer が無い、または subject が空の場合。

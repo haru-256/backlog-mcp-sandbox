@@ -12,7 +12,11 @@ import httpx
 
 
 class BacklogApi(Protocol):
-    """実 HTTP とテスト用の偽クライアントが同じ操作を持つ。"""
+    """実 HTTP とテスト用の偽クライアントが同じ操作を持つ。
+
+    `exchange_code` は認可コードを token に換える。
+    `list_issues` はその token で課題を取る。
+    """
 
     async def exchange_code(
         self, domain: str, client_id: str, client_secret: str, code: str, redirect_uri: str
@@ -27,10 +31,16 @@ class HttpxBacklogApi:
     """httpx で Backlog REST を叩く実装。"""
 
     def __init__(self, http: httpx.AsyncClient | None = None) -> None:
+        """HTTP クライアントを任意で差し込む。テストで偽応答を返すときに使う。
+
+        Args:
+            http: 省略時は呼び出しごとに AsyncClient を開いて閉じる。
+        """
         self._http = http
 
     @asynccontextmanager
     async def _client(self) -> AsyncIterator[httpx.AsyncClient]:
+        """差し込まれた client があればそれを使い、無ければ短命の client を開く。"""
         if self._http is not None:
             yield self._http
             return
