@@ -2,15 +2,13 @@
 
 Chat API 向けの自作 Backlog MCP **Server**。Host は `v3/backend`。
 
-接続はチャット外の OAuth。tool は `list_connected_spaces` と `list_issues` の二つ。
+接続と token は Host が持つ。MCP は渡された `space` と `access_token` で `list_issues` する。
 
 ## 入口
 
 | パス | 誰が呼ぶか | 認証 |
 |---|---|---|
 | `/mcp` | Host の MCP Client | Bearer JWT（`typ=mcp`） |
-| `/connect` | ブラウザ（接続ボタン） | query の JWT（`typ=connect`） |
-| `/callback` | Backlog からの 302 | OAuth の `state` |
 | `/health` | Compose | なし |
 
 ## ファイル（読む順）
@@ -18,13 +16,10 @@ Chat API 向けの自作 Backlog MCP **Server**。Host は `v3/backend`。
 | ファイル | 役割 |
 |---|---|
 | `server.py` | 配線。tool 登録と起動 |
-| `store.py` | OAuth アプリ / 接続 / 認可途中の三表 |
-| `connect.py` | `/connect` と `/callback` |
-| `auth.py` | `/mcp` の JWT |
-| `tools.py` | スペース解決と課題一覧 |
+| `auth.py` | `/mcp` の JWT。呼び出し元が Host であることの証明 |
+| `tools.py` | 渡された space と token で課題一覧 |
 | `backlog.py` | Backlog REST |
-| `space.py` | スペース名の正規化 |
-| `jwt_tokens.py` | `connect` / `mcp` 共通の検証 |
-| `settings.py` | 環境変数 |
+| `jwt_tokens.py` | `typ=mcp` の検証 |
+| `settings.py` | JWT と公開 URL |
 
-永続化はメモリのみ。再起動で接続は消える。
+MCP は接続を持たない。token は Host が tool 引数で渡す。

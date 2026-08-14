@@ -1,23 +1,23 @@
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from urllib.parse import urlencode
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
 from loguru import logger
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from .agent import run_agent
-from .jwt_tokens import sign_token
+from .connect import handle_callback, handle_connect_get, handle_connect_post
 from .logging_config import configure_logging
 from .request_context import request_id_var
 from .settings import Settings
+from .store import MemoryStore
 
 settings = Settings.from_env()
 configure_logging(settings)
+store = MemoryStore()
 
 app = FastAPI()
 
@@ -83,37 +83,49 @@ async def chat(request: ChatRequest) -> ChatResponse:
         UnsupportedToolCallTypeError: tool_call.type が function でない場合。
         json.JSONDecodeError: LLM が返した tool 引数が JSON でない場合。
     """
-    messages = await run_agent(list(request.messages), settings, request.user_id, request.org_id)
+    messages = await run_agent(
+        list(request.messages), settings, request.user_id, request.org_id, store
+    )
     return ChatResponse(message=messages[-1], messages=messages)
 
 
 @app.get("/backlog/connect")
-async def backlog_connect(
-    user_id: str = Query(min_length=1),
-    org_id: str = Query(min_length=1),
-) -> RedirectResponse:
-    """Backlog 接続画面へ飛ばす。チャットからは呼ばない。
+async def backlog_connect(request: Request) -> Response:
+    """Backlog 接続フォームを出す。チャットからは呼ばない。
 
     Args:
-        user_id: Chat 上のユーザー ID。空文字は不可。
-        org_id: Chat テナント ID。空文字は不可。
+        request: `user_id` と `org_id` を query に持つ GET。
 
     Returns:
-        MCP `/connect` への 302。query の `state` は署名済み JWT。
-
-    Raises:
-        fastapi.HTTPException: user_id / org_id が空のときは 422。
+        スペース入力フォーム。足りない query ならエラー HTML。
     """
-    state = sign_token(
-        secret=settings.mcp_jwt_secret,
-        typ="connect",
-        user_id=user_id,
-        org_id=org_id,
-        issuer=settings.host_public_url,
-        ttl_seconds=settings.connect_token_ttl_seconds,
-    )
-    query = urlencode({"state": state})
-    return RedirectResponse(f"{settings.mcp_public_url}/connect?{query}", status_code=302)
+    return await handle_connect_get(request)
+
+
+@app.post("/backlog/connect")
+async def backlog_connect_post(request: Request) -> Response:
+    """接続フォームの送信。Backlog の同意画面へ飛ばす。
+
+    Args:
+        request: `user_id` / `org_id` / `space` を持つ POST。
+
+    Returns:
+        Backlog への 302。入力不足ならフォームを 400 で返す。
+    """
+    return await handle_connect_post(request, settings, store)
+
+
+@app.get("/backlog/callback")
+async def backlog_callback(request: Request) -> Response:
+    """Backlog から戻る。token を store に書き、検証 UI へ返す。
+
+    Args:
+        request: `code` と `state` を持つ GET。
+
+    Returns:
+        検証 UI への 302。失敗ならエラー HTML。
+    """
+    return await handle_callback(request, settings, store)
 
 
 @app.get("/health")

@@ -1,14 +1,12 @@
-"""MCP がメモリに持つ三つの表。再起動で消える。
+"""Host がメモリに持つ二つの表。再起動で消える。
 
-Host は Backlog の token を持たない。置き場はこのプロセスだけである。
+Host は connections に (user_id, domain) → Backlog token を持つ。
+OAuth アプリ（client_id / secret）は Settings が環境変数から読む。ここには置かない。
 
 +------------------+----------------------------------+
 | 表               | キー → 値                        |
 +------------------+----------------------------------+
-| space_apps       | スペース → OAuth アプリ          |
-|                  | （client_id / secret。スペースに |
-|                  |  つき一度）                      |
-| connections      | (Chat ユーザー, スペース) →      |
+| connections      | (user_id, domain) →              |
 |                  | その人が同意した Backlog token   |
 | pending          | Backlog に渡した state →         |
 |                  | 認可が戻ってくるまでの仮データ   |
@@ -19,26 +17,11 @@ from dataclasses import dataclass
 
 
 @dataclass
-class SpaceApp:
-    """ある Backlog スペースに登録された OAuth アプリ。
-
-    Attributes:
-        domain: スペースのホスト名。例: acme.backlog.com。
-        client_id: そのスペースのアプリ ID。
-        client_secret: そのスペースのアプリ秘密鍵。
-    """
-
-    domain: str
-    client_id: str
-    client_secret: str
-
-
-@dataclass
 class Connection:
     """Chat ユーザーが、あるスペースへ OAuth したあとの接続。
 
     Attributes:
-        user_id: Chat 上のユーザー ID。JWT の `sub`。
+        user_id: Chat 上のユーザー ID。
         org_id: Chat テナント ID。JWT の `org`。
         domain: 接続したスペースのホスト名。
         access_token: その人が同意した Backlog token。
@@ -68,32 +51,12 @@ class PendingOAuth:
 
 
 class MemoryStore:
-    """上の三表を dict で持つ。永続化はしない。"""
+    """上の二表を dict で持つ。永続化はしない。"""
 
     def __init__(self) -> None:
-        """空の三表で始める。"""
-        self.space_apps: dict[str, SpaceApp] = {}
+        """空の二表で始める。"""
         self.connections: dict[tuple[str, str], Connection] = {}
         self.pending: dict[str, PendingOAuth] = {}
-
-    def get_space_app(self, domain: str) -> SpaceApp | None:
-        """そのスペースの OAuth アプリを返す。まだ無ければ None。
-
-        Args:
-            domain: スペースのホスト名。
-
-        Returns:
-            登録済みなら SpaceApp。未登録なら None。
-        """
-        return self.space_apps.get(domain)
-
-    def put_space_app(self, app: SpaceApp) -> None:
-        """スペースの OAuth アプリを覚える。同じ domain なら上書きする。
-
-        Args:
-            app: 覚えるアプリ。
-        """
-        self.space_apps[app.domain] = app
 
     def put_connection(self, connection: Connection) -> None:
         """ユーザーとスペースの組に Backlog token を紐づける。

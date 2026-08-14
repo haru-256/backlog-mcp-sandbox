@@ -5,10 +5,9 @@
 
 読む順:
 
-1. `server.py` — 入口が `/mcp`（tool）と `/connect`（ブラウザ）の二つであること
-2. `store.py` — 覚える表が三つ（OAuth アプリ / 接続 / 認可途中）
-3. `connect.py` — チャット外の OAuth
-4. `tools.py` — JWT のユーザーからスペースを決めて課題を返す
+1. `server.py` — 入口が `/mcp`（tool）と `/health` であること
+2. `tools.py` — 渡された space / access_token で課題を返す
+3. `backlog.py` — Backlog REST。token は引数で受け取る
 """
 
 from .server import run

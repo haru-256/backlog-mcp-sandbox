@@ -7,7 +7,7 @@ v1 は公式の Backlog MCP を **外から使う** 教材だった。v3 は同�
 - MCP の Host / Client / Server は、どのプロセスのどのファイルか
 - LLM は Backlog API を直接呼ばない。なぜ tool を経由するのか
 - 「接続」と「チャット」は、なぜ別の流れなのか
-- 1 つの MCP が複数ユーザー・複数スペースを持つとき、トークンはどこに置くのか
+- Host がユーザーとスペースの組で token を持つとき、MCP には何を渡すのか
 
 ---
 
@@ -53,12 +53,12 @@ v1 では Server が公式コンテナだった。v3 では `mcp/` がその位�
 
 ## v3 が公式 MCP と違うところ
 
-公式 Backlog MCP の OAuth は、**1 サーバー = 1 組織** である。複数スペースを API キーで載せる機能はあるが、OAuth とは両立しない。
+公式 Backlog MCP の OAuth は、**1 サーバー = 1 組織** である。複数スペースを API キーで載せる機能はあるが、OAuth とは両立しない。これは公式 MCP サーバーの実装制約である。Backlog の OAuth アプリ自体は 1 組で複数スペースの認可に使える。
 
 v3 の Server は次を同時に持つ。
 
 - Chat のテナント（`org_id`）は Host が知る。ユーザーと org は 1:1
-- Backlog のスペースは Server だけが知る。1 ユーザーが複数スペースを接続できる
+- スペースと token は Host が知る。MCP は渡された space と token で API を叩く。1 ユーザーが複数スペースを接続できる
 - 接続はチャットの外のボタンで明示的に行う。tool 結果から OAuth URL は出さない
 
 Cursor からこの MCP につなぐ想定はない。クライアントは自前の Chat Host だけである。
@@ -70,8 +70,8 @@ Cursor からこの MCP につなぐ想定はない。クライアントは自�
 ```text
 v3/
   compose.yaml     mcp と api を常駐させる
-  mcp/             MCP Server（接続 UI + OAuth + tools）
-  backend/         MCP Host（Chat API + tool loop）
+  mcp/             MCP Server（tools のみ）
+  backend/         MCP Host（Chat API + OAuth + token store）
   frontend/        検証 UI（身元入力 + 接続ボタン + チャット）
 ```
 
@@ -79,8 +79,8 @@ Compose 上のポートは次である。
 
 | プロセス | ポート | 主なパス |
 |---|---|---|
-| MCP Server | 3333 | `/mcp`（tool）、`/connect`（接続）、`/callback`（OAuth） |
-| Chat Host | 8003 | `/chat`、`/backlog/connect`、`/health` |
+| MCP Server | 3333 | `/mcp`（tool）、`/health` |
+| Chat Host | 8003 | `/chat`、`/backlog/connect`、`/backlog/callback`、`/health` |
 | 検証 UI | 5173 | ブラウザ。Compose には載せない |
 
 `/mcp` は Streamable HTTP である。Host が MCP を子プロセス（stdio）で都度起動しない。v1 と同じ判断である。
@@ -105,14 +105,14 @@ flowchart TB
     JwtHost[jwt_tokens.py]
     McpClient[mcp_client.py]
     Llm[llm.py]
+    Connect[connect.py]
+    Store[store.py]
   end
 
   subgraph server [mcp]
     Srv[server.py]
-    Connect[connect.py]
     Auth[auth.py]
     Tools[tools.py]
-    Store[store.py]
     BacklogMod[backlog.py]
   end
 
@@ -125,27 +125,26 @@ flowchart TB
   Agent --> McpClient
   Agent --> Llm
   McpClient -->|"Bearer JWT /mcp"| Srv
-  Api -->|"302 /connect"| Connect
+  Api --> Connect
+  Connect --> Store
+  McpClient --> Store
   Srv --> Auth
   Srv --> Tools
-  Connect --> Store
-  Tools --> Store
   Tools --> BacklogMod
-  Connect --> BacklogMod
 ```
 
 | ファイル | 役割 |
 |---|---|
 | [frontend/src/components/IdentityBar.tsx](frontend/src/components/IdentityBar.tsx) | 「Backlog を接続」リンク。チャット API は呼ばない |
-| [backend/src/chat/api.py](backend/src/chat/api.py) | HTTP の入口。接続は 302、チャットは JSON |
+| [backend/src/chat/api.py](backend/src/chat/api.py) | HTTP の入口。接続フォームとチャット |
+| [backend/src/chat/connect.py](backend/src/chat/connect.py) | `/backlog/connect` と `/backlog/callback`。チャット外の OAuth |
+| [backend/src/chat/store.py](backend/src/chat/store.py) | 接続と認可途中の二表。token の置き場 |
 | [backend/src/chat/agent.py](backend/src/chat/agent.py) | LLM ↔ tool loop。MCP セッションを開く |
-| [backend/src/chat/mcp_client.py](backend/src/chat/mcp_client.py) | `list_tools` / `call_tool` を OpenAI 形式に合わせる |
+| [backend/src/chat/mcp_client.py](backend/src/chat/mcp_client.py) | schema から token を隠し、store の token を注入する |
 | [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) | 配線。`/mcp` の tool と `/health` |
-| [mcp/src/backlog_mcp/connect.py](mcp/src/backlog_mcp/connect.py) | `/connect` と `/callback`。チャット外の OAuth |
-| [mcp/src/backlog_mcp/store.py](mcp/src/backlog_mcp/store.py) | OAuth アプリ / 接続 / 認可途中の三表 |
-| [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) | 接続済みスペースの解決と課題一覧 |
+| [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) | 渡された space と token で課題一覧 |
 
-Host はスペース名も Backlog トークンも持たない。知っているのは `user_id` と `org_id` だけである。
+スペースと token は Host が持つ。MCP は渡された `space` と `access_token` で Backlog API を叩く。
 
 ---
 
@@ -158,31 +157,28 @@ sequenceDiagram
   participant User
   participant FE as frontend
   participant Host as backend_api
-  participant MCP as mcp_connect
   participant Backlog
 
   User->>FE: Backlog を接続
   FE->>Host: GET /backlog/connect?user_id&org_id
-  Host->>Host: connect 用 JWT を署名
-  Host->>MCP: 302 /connect?state=JWT
-  User->>MCP: スペースを入力
-  Note over MCP: 未登録なら client_id/secret も保存
-  MCP->>Backlog: 302 OAuth2AccessRequest
+  User->>Host: スペースを入力
+  Host->>Backlog: 302 OAuth2AccessRequest
   User->>Backlog: 同意
-  Backlog->>MCP: GET /callback?code
-  MCP->>Backlog: code を token に交換
-  MCP->>MCP: connections に user と space を保存
-  MCP->>FE: 302 ?connected=1
+  Backlog->>Host: GET /backlog/callback?code
+  Host->>Backlog: code を token に交換
+  Host->>Host: connections に user と space を保存
+  Host->>FE: 302 ?connected=1
 ```
 
-ここで JWT は **MCP の tool 用ではない。** Host が「このブラウザ操作は user X / org Y のものだ」と MCP に伝えるための、短い `typ=connect` トークンである。
+接続フォームは Host 上にある。ブラウザが MCP へ身元を証明する必要は無い。接続用の JWT は発行しない。
 
-MCP が覚える表は二つある。どちらもメモリであり、再起動で消える。
+Host が覚える表は接続だけである。メモリであり、再起動で消える。
 
-1. `space_apps` — その Backlog スペースの OAuth アプリ（スペースにつき一度）
-2. `connections` — `(user_id, domain) → Backlog access token`（ユーザーとスペースの組）
+- `connections` — `(user_id, domain) → Backlog access token`（ユーザーとスペースの組）
 
-2 本目のスペースも、同じボタンから同じ `/connect` に入る。チャットの tool には `connect` を置いていない。
+OAuth アプリは Host に 1 組である。`BACKLOG_CLIENT_ID` と `BACKLOG_CLIENT_SECRET` を環境変数から読む。Redirect URI は `{HOST_PUBLIC_URL}/backlog/callback` で、ローカル既定は `http://localhost:8003/backlog/callback` である。Backlog Developer サイトのアプリにこの URI を登録する。
+
+2 本目のスペースも、同じボタンから同じ `/backlog/connect` に入る。チャットの tool には `connect` を置いていない。
 
 ---
 
@@ -205,11 +201,12 @@ sequenceDiagram
   Host->>Host: typ=mcp の JWT を署名
   Host->>MCP: Streamable HTTP /mcp Bearer
   Host->>MCP: tools/list
-  MCP-->>Host: list_connected_spaces, list_issues
+  MCP-->>Host: list_issues
+  Host->>Host: list_connected_spaces を schema に足す
   Host->>LLM: messages と tool schemas
   LLM-->>Host: tool_call list_issues
-  Host->>MCP: tools/call list_issues
-  MCP->>MCP: JWT の sub で user を特定
+  Host->>Host: store から space と token を決める
+  Host->>MCP: tools/call list_issues with space and token
   MCP->>Backlog: GET /api/v2/issues
   Backlog-->>MCP: issues
   MCP-->>Host: JSON 文字列
@@ -224,14 +221,14 @@ loop の不変条件は [backend/src/chat/agent.py](backend/src/chat/agent.py) �
 - tool 行の `tool_call_id` は、対応する `assistant.tool_calls[i].id` と一致する
 - tool_calls が無ければ終了する
 
-MCP の tool は二つだけである。
+LLM から見える tool は二つである。実装の場所が違う。
 
-| tool | すること |
-|---|---|
-| `list_connected_spaces` | そのユーザーが OAuth したスペースを返す |
-| `list_issues` | 指定スペースの課題を返す。未接続なら「接続ボタンから」と返す（URL は付けない） |
+| tool | 実装 | すること |
+|---|---|---|
+| `list_connected_spaces` | Host | そのユーザーが OAuth したスペースを返す |
+| `list_issues` | MCP | 渡された `space` と `access_token` で課題を返す |
 
-`list_issues` の `space` は、Chat の org ではない。そのユーザーが接続済みの Backlog ドメインである。接続が 1 本なら省略できる。2 本以上なら必須である。他人のスペースは拒否する。
+未接続の判定は Host がする。未接続なら「接続ボタンから」と返し、MCP は呼ばない（URL は付けない）。`list_issues` の `space` は、Chat の org ではない。そのユーザーが接続済みの Backlog ドメインである。接続が 1 本なら省略できる。2 本以上なら必須である。他人のスペースは拒否する。
 
 ---
 
@@ -240,13 +237,12 @@ MCP の tool は二つだけである。
 初学者が混同しやすいので、層を分ける。
 
 ```text
-ブラウザ  --connect JWT-->  MCP /connect   --Backlog OAuth-->  そのスペースの token
-Host     --mcp JWT------>  MCP /mcp       --保存済み token-->  Backlog API
+ブラウザ  --フォーム-->  Host /backlog/connect  --Backlog OAuth-->  そのスペースの token
+Host     --mcp JWT + tool引数(space, token)-->  MCP /mcp  --渡された token-->  Backlog API
 ```
 
-- **connect JWT**: 接続ボタン用。Host が署名し、MCP の HTML 画面が検証する
-- **mcp JWT**: tool 呼び出し用。Host が毎チャット署名し、`/mcp` が検証する。`sub` がユーザー
-- **Backlog token**: ユーザーが同意したあとの API トークン。MCP の `connections` にだけある
+- **mcp JWT**: `/mcp` の呼び出し元が Host であることの証明。ユーザーの token を引くキーではない
+- **Backlog token**: ユーザーが同意したあとの API トークン。Host の `connections` にある。MCP へは tool 引数で渡す
 
 Host と MCP は同じ `MCP_JWT_SECRET` を持つ。これは自前 Host だけがクライアントだからである。Cursor 向けの Dynamic Client Registration は実装していない。
 
@@ -254,7 +250,7 @@ Host と MCP は同じ `MCP_JWT_SECRET` を持つ。これは自前 Host だけ�
 
 ## 起動
 
-秘密情報はリポジトリ直下の `.envrc` を direnv で読む。`OPENCODE_GO_API_KEY` が Host の LLM に必要である。
+秘密情報はリポジトリ直下の `.envrc` を direnv で読む。`OPENCODE_GO_API_KEY` が Host の LLM に必要である。Host には `BACKLOG_CLIENT_ID` と `BACKLOG_CLIENT_SECRET` が必要である。Backlog アプリの Redirect URI は `http://localhost:8003/backlog/callback` にすること。
 
 ```bash
 cd v3 && docker compose up
@@ -279,9 +275,9 @@ cd v3/backend && uv run pytest
 
 1. [backend/src/chat/agent.py](backend/src/chat/agent.py) — Host の loop。MCP を知らなくても「LLM が tool を要求する」形が見える
 2. [backend/src/chat/mcp_client.py](backend/src/chat/mcp_client.py) — MCP の tool schema を LLM 向けに変換する薄い層
-3. [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) — 入口が `/mcp` と `/connect` の二つであること
-4. [mcp/src/backlog_mcp/store.py](mcp/src/backlog_mcp/store.py) — OAuth アプリとユーザー token の置き場
-5. [mcp/src/backlog_mcp/connect.py](mcp/src/backlog_mcp/connect.py) — チャットと切り離した OAuth
-6. [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) — JWT のユーザーからスペースを解決する
+3. [mcp/src/backlog_mcp/server.py](mcp/src/backlog_mcp/server.py) — 入口が `/mcp` と `/health` であること
+4. [backend/src/chat/store.py](backend/src/chat/store.py) — ユーザー token の置き場。OAuth アプリは Settings
+5. [backend/src/chat/connect.py](backend/src/chat/connect.py) — チャットと切り離した OAuth
+6. [mcp/src/backlog_mcp/tools.py](mcp/src/backlog_mcp/tools.py) — 渡された space と token で課題を返す
 
 リポジトリ全体の地図は [docs/guide/index.html](../docs/guide/index.html) にある。手順は [docs/guide/v3.html](../docs/guide/v3.html) にある。v1 の Host を先に読むと、v3 で増えたのが Server 側だと対比しやすい。

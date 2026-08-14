@@ -21,6 +21,7 @@ from .jwt_tokens import sign_token
 from .llm import OpencodeGoLLM
 from .mcp_client import BacklogMCP
 from .settings import Settings
+from .store import MemoryStore
 
 _messages_adapter: TypeAdapter[list[ChatCompletionMessageParam]] = TypeAdapter(
     list[ChatCompletionMessageParam]
@@ -101,7 +102,7 @@ def mcp_bearer_token(settings: Settings, user_id: str, org_id: str) -> str:
     """MCP の `/mcp` に付ける Host 署名 JWT を発行する。
 
     Args:
-        settings: JWT 秘密鍵・issuer・audience・TTL を含む設定。
+        settings: JWT 秘密鍵・issuer・TTL を含む設定。
         user_id: Chat 上のユーザー ID。JWT の `sub`。
         org_id: Chat テナント ID。JWT の `org`。
 
@@ -115,7 +116,6 @@ def mcp_bearer_token(settings: Settings, user_id: str, org_id: str) -> str:
         org_id=org_id,
         issuer=settings.host_public_url,
         ttl_seconds=settings.mcp_token_ttl_seconds,
-        audience=settings.mcp_public_url,
     )
 
 
@@ -150,6 +150,7 @@ async def run_agent(
     settings: Settings,
     user_id: str,
     org_id: str,
+    store: MemoryStore,
 ) -> list[ChatCompletionMessageParam]:
     """LLM と MCP を使って、messages に対する応答を生成する。接続を開き、loop を一度回す。
 
@@ -158,6 +159,7 @@ async def run_agent(
         settings: エージェントの設定。
         user_id: Chat 上のユーザー ID。MCP JWT の `sub`。
         org_id: Chat テナント ID。MCP JWT の `org`。
+        store: Host が持つ接続表。MCP に渡す token の出どころ。
 
     Returns:
         入力に LLM / tool 行を足した会話履歴。末尾は assistant。
@@ -172,7 +174,7 @@ async def run_agent(
     async with open_mcp_session(settings, user_id, org_id) as session:
         logger.debug(f"initialize mcp session: {settings.mcp_server_url}")
         await session.initialize()
-        mcp = BacklogMCP(session)
+        mcp = BacklogMCP(session, store, user_id)
         result = await run_tool_loop(messages, llm, mcp, settings.max_tool_calls)
         if result[-1].get("role") != "assistant":
             raise RuntimeError("The last message is not from the assistant.")

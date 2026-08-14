@@ -58,7 +58,7 @@
       教材は三段に分かれる。<strong>v1</strong> はステートレスな Host で、tool loop だけを扱う。
       公式 Backlog MCP を外から使う。<strong>v2</strong> は Host の責務を増やす。
       会話の永続化、SSE、制限と失敗の契約、監査。公式 MCP は v1 と同じである。
-      <strong>v3</strong> は Server 側を自分で書く。Host の loop は v1 と同じ形のまま、公式 MCP を外す。
+      <strong>v3</strong> は Server 側を自分で書く。公式を外すのは、スペースと token を Host が持ち、MCP は渡された値で API を叩くためである。
       三つの版は<strong>コードを共有しない</strong>独立したアプリケーションである。
       共通ライブラリにまとめると、実装を並べて差分を読むという学習手段が失われるためである。
     </p>
@@ -172,7 +172,7 @@ flowchart LR
     <p>
       v1 と v2 では Server が公式イメージである。学ぶ対象は Host の責務であって、Backlog API のラッパーではない。
       v3 で Server を自分で書くのは、公式 OAuth が 1 サーバー = 1 組織だからである。
-      複数テナントを一つのプロセスで持つには、接続とトークンの置き場を Server 側に設計し直す必要がある。
+      複数テナントを一つのプロセスで持つには、スペースと token を Host が持ち、MCP は渡された space と token で API を叩く。
       手順は <a href="./v3.html">v3 学習書</a> に置く。
     </p>
 
@@ -290,7 +290,7 @@ sequenceDiagram
       毎回の HTTP リクエストで MCP 接続を省くという意味ではない。
       Chat セッションを持たない v1 にも MCP セッションは存在する。
       v3 の Chat も v1 と同じくステートレスである。増えるのは Chat セッションではなく、
-      MCP Server がメモリに持つ Backlog 接続である。詳細は <a href="./v3.html">v3 学習書</a> に置く。
+      Host がメモリに持つ Backlog 接続である。詳細は <a href="./v3.html">v3 学習書</a> に置く。
     </p>
     <p>
       逆に v2 でブラウザを再読み込みしたとき、Chat セッションが DB に残っていれば履歴は復元できる。
@@ -340,6 +340,7 @@ sequenceDiagram
     <p>
       v3 は例外である。公式 OAuth が 1 サーバー = 1 組織であるため、
       複数テナントを一つのプロセスで持つには Server を自分で書く。
+      スペースと token は Host が持ち、MCP は渡された値で API を叩く。
       手順は <a href="./v3.html">v3 学習書</a> に置く。
       ここでは v1 / v2 が使う公式コンテナの定義だけを示す。
     </p>
@@ -479,8 +480,8 @@ async with streamable_http_client(url) as (read, write):
       v2 はこれに <code>DATABASE_URL</code>、<code>POSTGRES_PASSWORD</code>、
       timeout と tool 上限の設定を足す。詳細は v2.html に置く。
       v3 は <code>BACKLOG_DOMAIN</code> / <code>BACKLOG_API_KEY</code> を使わない。
-      代わりに <code>MCP_JWT_SECRET</code>、<code>MCP_PUBLIC_URL</code>、<code>HOST_PUBLIC_URL</code>、
-      <code>FRONTEND_PUBLIC_URL</code> を使う。詳細は v3.html に置く。
+      代わりに <code>MCP_JWT_SECRET</code>、<code>MCP_PUBLIC_URL</code>、<code>HOST_PUBLIC_URL</code> を Host と MCP の両方で使う。
+      <code>FRONTEND_PUBLIC_URL</code>、<code>BACKLOG_CLIENT_ID</code>、<code>BACKLOG_CLIENT_SECRET</code> は Host だけが使う。詳細は v3.html に置く。
     </p>
     <div class="note">
       <strong>秘密情報の扱い</strong>

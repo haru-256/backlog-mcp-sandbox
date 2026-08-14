@@ -17,7 +17,10 @@ class Settings(BaseSettings):
     mcp_server_url: str = "http://localhost:3333/mcp"
     mcp_public_url: str = "http://localhost:3333"
     host_public_url: str = "http://localhost:8003"
+    frontend_public_url: str = "http://localhost:5173"
     mcp_jwt_secret: str
+    backlog_client_id: str
+    backlog_client_secret: str
     log_format: LogFormat = "human"
     max_tool_calls: int = 10
     connect_token_ttl_seconds: int = 600
@@ -38,7 +41,9 @@ class Settings(BaseSettings):
             return value.lower()
         return value  # type: ignore[return-value]
 
-    @field_validator("mcp_public_url", "host_public_url", "mcp_server_url", mode="before")
+    @field_validator(
+        "mcp_public_url", "host_public_url", "mcp_server_url", "frontend_public_url", mode="before"
+    )
     @classmethod
     def strip_trailing_slash(cls, value: object) -> object:
         """URL 末尾のスラッシュを除く。
@@ -52,6 +57,9 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.rstrip("/")
         return value
+
+    def oauth_redirect_uri(self) -> str:
+        return f"{self.host_public_url}/backlog/callback"
 
     @classmethod
     def from_env(cls) -> Self:

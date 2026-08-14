@@ -6,6 +6,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from .agent import run_agent
 from .logging_config import configure_logging
 from .settings import Settings
+from .store import MemoryStore
 
 
 async def _run(prompt: str, user_id: str, org_id: str) -> None:
@@ -24,7 +25,7 @@ async def _run(prompt: str, user_id: str, org_id: str) -> None:
     settings = Settings.from_env()
     configure_logging(settings)
     messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt}]
-    result = await run_agent(messages, settings, user_id, org_id)
+    result = await run_agent(messages, settings, user_id, org_id, MemoryStore())
     logger.info(f"content: {result[-1].get('content')}")
 
 

@@ -2,7 +2,7 @@
 
 from html import escape
 
-from starlette.responses import HTMLResponse
+from fastapi.responses import HTMLResponse
 
 CONNECT_FORM = """<!doctype html>
 <html lang="ja">
@@ -11,22 +11,12 @@ CONNECT_FORM = """<!doctype html>
   <h1>Backlog を接続</h1>
   <p>Chat のテナント <code>{org}</code> / ユーザー <code>{user}</code> に、Backlog スペースを追加します。</p>
   {error}
-  <form method="post" action="/connect">
-    <input type="hidden" name="state" value="{state}">
+  <form method="post" action="/backlog/connect">
+    <input type="hidden" name="user_id" value="{user}">
+    <input type="hidden" name="org_id" value="{org}">
     <p>
       <label>スペース<br>
         <input name="space" size="40" placeholder="acme.backlog.com" required>
-      </label>
-    </p>
-    <p>未登録のスペースでは、そのスペースに作った OAuth アプリの値も入力してください。</p>
-    <p>
-      <label>Client ID（未登録時のみ必須）<br>
-        <input name="client_id" size="40">
-      </label>
-    </p>
-    <p>
-      <label>Client Secret（未登録時のみ必須）<br>
-        <input name="client_secret" size="40" type="password">
       </label>
     </p>
     <button type="submit">Backlog で認可する</button>
@@ -36,13 +26,12 @@ CONNECT_FORM = """<!doctype html>
 """
 
 
-def connect_form(org: str, user: str, state: str, error: str | None = None) -> HTMLResponse:
+def connect_form(org: str, user: str, error: str | None = None) -> HTMLResponse:
     """スペース入力フォーム。エラー時は 400 で同じ画面を返す。
 
     Args:
-        org: Chat テナント ID。画面に表示する。
-        user: Chat ユーザー ID。画面に表示する。
-        state: 次の POST に載せる connect JWT。
+        org: Chat テナント ID。画面に表示し、hidden `org_id` に載せる。
+        user: Chat ユーザー ID。画面に表示し、hidden `user_id` に載せる。
         error: あればアラートとして出す。
 
     Returns:
@@ -52,7 +41,6 @@ def connect_form(org: str, user: str, state: str, error: str | None = None) -> H
     body = CONNECT_FORM.format(
         org=escape(org),
         user=escape(user),
-        state=escape(state),
         error=error_html,
     )
     return HTMLResponse(body, status_code=400 if error else 200)

@@ -13,13 +13,10 @@ class Settings(BaseSettings):
 
     Attributes:
         mcp_jwt_secret: Host と同じ HMAC 秘密鍵。
-        mcp_public_url: ブラウザから見た MCP。Redirect URI と JWT の aud に使う。
+        mcp_public_url: ブラウザから見た MCP の origin。AuthSettings の resource_server_url。
         host_public_url: Host の公開 URL。JWT の iss。
-        frontend_public_url: OAuth 完了後に戻す検証 UI。
         host: bind 先。コンテナでは 0.0.0.0。
         port: 待ち受けポート。既定 3333。
-        allowed_hosts: DNS rebinding 対策。Compose の Host ヘッダを含める。
-        allowed_origins: ブラウザ Origin の許可。
         issue_limit: list_issues の件数上限。
     """
 
@@ -28,17 +25,14 @@ class Settings(BaseSettings):
     mcp_jwt_secret: str
     mcp_public_url: str = "http://localhost:3333"
     host_public_url: str = "http://localhost:8003"
-    frontend_public_url: str = "http://localhost:5173"
     host: str = "0.0.0.0"
     port: int = 3333
-    allowed_hosts: str = "mcp,mcp:3333,localhost,127.0.0.1,localhost:3333,127.0.0.1:3333"
-    allowed_origins: str = "http://localhost:*,http://127.0.0.1:*"
     issue_limit: int = 20
 
-    @field_validator("mcp_public_url", "host_public_url", "frontend_public_url", mode="before")
+    @field_validator("mcp_public_url", "host_public_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, value: object) -> object:
-        """URL 末尾のスラッシュを除き、`/callback` を足したときに二重にならないようにする。
+        """URL 末尾のスラッシュを除く。
 
         Args:
             value: 環境変数の生の値。
@@ -49,30 +43,6 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.rstrip("/")
         return value
-
-    def oauth_redirect_uri(self) -> str:
-        """Backlog アプリに登録する Redirect URI と同じ文字列。
-
-        Returns:
-            `{mcp_public_url}/callback`。既定は `http://localhost:3333/callback`。
-        """
-        return f"{self.mcp_public_url}/callback"
-
-    def allowed_host_list(self) -> list[str]:
-        """DNS rebinding 対策で許す Host ヘッダ。
-
-        Returns:
-            カンマ区切り `allowed_hosts` を分割したリスト。
-        """
-        return [item.strip() for item in self.allowed_hosts.split(",") if item.strip()]
-
-    def allowed_origin_list(self) -> list[str]:
-        """許すブラウザ Origin。
-
-        Returns:
-            カンマ区切り `allowed_origins` を分割したリスト。
-        """
-        return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
 
     @classmethod
     def from_env(cls) -> Self:
