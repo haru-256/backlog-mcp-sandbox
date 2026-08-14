@@ -71,7 +71,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     """自然言語の依頼を受け、LLM と Backlog MCP の loop を一度回す。
 
     Args:
-        request: 会話履歴と、MCP JWT に載せる user_id / org_id。
+        request: 会話履歴と、接続表を引く user_id / org_id。
 
     Returns:
         末尾の assistant 行と、tool 行を含む全 messages。

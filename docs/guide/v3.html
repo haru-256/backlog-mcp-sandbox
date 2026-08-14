@@ -35,7 +35,7 @@
       <ol>
         <li><span class="kind">OVERVIEW</span> <a href="#what">v3 で達成すること</a></li>
         <li><span class="kind">STEP 1</span> <a href="#server">自前の MCP を HTTP で常駐させる</a></li>
-        <li><span class="kind">STEP 2</span> <a href="#jwt">身元は Host が JWT で渡す</a></li>
+        <li><span class="kind">STEP 2</span> <a href="#private">MCP は Host からしか届かない</a></li>
         <li><span class="kind">STEP 3</span> <a href="#connect">接続はチャットの外</a></li>
         <li><span class="kind">STEP 4</span> <a href="#tools">スペースを解決して課題を返す</a></li>
         <li><span class="kind">STEP 5</span> <a href="#host">Host に user と接続入口を足す</a></li>
@@ -95,7 +95,7 @@
         <tr><td>Host</td><td><code>GET</code> / <code>POST</code></td><td><code>/backlog/connect</code></td><td>スペース入力と Backlog OAuth への 302。チャットからは呼ばない</td></tr>
         <tr><td>Host</td><td><code>GET</code></td><td><code>/backlog/callback</code></td><td>認可コードを token に交換する</td></tr>
         <tr><td>Host</td><td><code>GET</code></td><td><code>/health</code></td><td>プロセスが応答できることを示す</td></tr>
-        <tr><td>MCP</td><td>—</td><td><code>/mcp</code></td><td>Streamable HTTP。Bearer JWT 必須</td></tr>
+        <tr><td>MCP</td><td>—</td><td><code>/mcp</code></td><td>Streamable HTTP。認証なし。compose 内部のみ</td></tr>
         <tr><td>MCP</td><td><code>GET</code></td><td><code>/health</code></td><td>認証なし。Compose の healthcheck 用</td></tr>
       </tbody>
     </table>
@@ -114,7 +114,8 @@
 ├── backend/       # Host。Chat API + OAuth + token store
 └── frontend/      # 検証用 React。Compose には載せない</code></pre>
     <p>
-      ポートは MCP が <code>3333</code>、Host が <code>8003</code>、検証 UI が <code>5173</code> である。
+      ポートは Host が <code>8003</code>、検証 UI が <code>5173</code> である。
+      MCP の <code>3333</code> は compose 内部に留める。ホストには出さない。
       v1 の Host は <code>8001</code> のまま残す。同時に起動してもぶつからない。
     </p>
     <div class="diagram">
@@ -129,7 +130,6 @@ flowchart TB
   subgraph host [backend]
     Api[api.py]
     Agent[agent.py]
-    JwtHost[jwt_tokens.py]
     McpClient[mcp_client.py]
     Connect[connect.py]
     Store[store.py]
@@ -137,7 +137,6 @@ flowchart TB
 
   subgraph server [mcp]
     Srv[server.py]
-    Auth[auth.py]
     Tools[tools.py]
   end
 
@@ -146,13 +145,11 @@ flowchart TB
   Identity -->|"GET /backlog/connect"| Api
   ChatHook -->|"POST /chat"| Api
   Api --> Agent
-  Agent --> JwtHost
   Agent --> McpClient
-  McpClient -->|"Bearer JWT /mcp"| Srv
+  McpClient -->|"Streamable HTTP /mcp"| Srv
   Api --> Connect
   Connect --> Store
   McpClient --> Store
-  Srv --> Auth
   Srv --> Tools
       </div>
     </div>
@@ -167,30 +164,22 @@ flowchart TB
     <p>
       SDK は公式 <code>mcp</code> の 2.x を使う。<code>MCPServer</code> であり、
       古い記事の FastMCP や Prefect のラッパーではない。
-      <code>custom_route</code> は認証を通さない。health をここに載せる。
-      <code>/mcp</code> だけが <code>token_verifier</code> を通る。
+      <code>custom_route</code> に health を載せる。<code>/mcp</code> に認証は付けない。
     </p>
     <pre><code class="language-yaml">name: backlog-mcp-sandbox-v3
 
 services:
   mcp:
     build: ./mcp
-    environment:
-      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-change-me-please!!}
-      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:3333}
-      HOST_PUBLIC_URL: ${HOST_PUBLIC_URL:-http://localhost:8003}
-    ports:
-      - "3333:3333"</code></pre>
+    # ports は出さない。api から http://mcp:3333 だけが届く</code></pre>
     <p>
-      <code>MCP_PUBLIC_URL</code> はブラウザから見た MCP の origin である。JWT の aud 相当。
       Backlog アプリの Redirect URI は Host の
       <code>{HOST_PUBLIC_URL}/backlog/callback</code> であり、ローカル既定は
       <code>http://localhost:8003/backlog/callback</code> である。
       <code>BACKLOG_CLIENT_ID</code> と <code>BACKLOG_CLIENT_SECRET</code> は api サービス（Host）へ渡す。mcp サービスには載せない。
-      Compose 内部の <code>http://mcp:3333</code> はブラウザが開けない。
       公式 MCP の <code>ALLOWED_HOSTS</code> / <code>ALLOWED_ORIGINS</code> は載せない。
       あれは Cursor がブラウザから MCP の HTTP を直接叩くための DNS rebinding 対策であり、
-      v3 の <code>/mcp</code> は Host だけが JWT 付きで呼ぶ。
+      v3 の <code>/mcp</code> は Host だけが compose 内部から呼ぶ。
     </p>
     <pre><code class="language-python"># mcp/src/backlog_mcp/server.py
 from mcp.server.mcpserver import MCPServer
@@ -219,97 +208,51 @@ def run() -&gt; None:
         streamable_http_path="/mcp",
     )</code></pre>
     <div class="note">
-      <strong>この時点では <code>/mcp</code> のスモークを急がない</strong>
+      <strong>ホストから <code>/health</code> は叩けない</strong>
       v1 の公式 MCP は API キーだけで <code>list_tools</code> できた。
-      v3 の <code>/mcp</code> は STEP 2 で JWT を付けてから開く。
-      先に通すのは認証なしの <code>GET /health</code> である。
+      v3 の MCP はホストに port を出さない。生存確認は Compose の healthcheck がコンテナ内で行う。
     </div>
     <pre><code class="language-bash">cd v3 &amp;&amp; docker compose up mcp
-curl -sS http://127.0.0.1:3333/health</code></pre>
+docker compose ps</code></pre>
     <div class="check">
       <strong>STEP 1 の合格線</strong>
-      自前イメージが <code>3333</code> で応答し、<code>{"ok": true}</code> が返る。
-      公式 <code>ghcr.io/nulab/backlog-mcp-server</code> は Compose に無い。
+      自前イメージが healthy になり、公式 <code>ghcr.io/nulab/backlog-mcp-server</code> は Compose に無い。
     </div>
 
     <span class="label">STEP 2</span>
-    <h2 id="jwt">身元は Host が JWT で渡す</h2>
+    <h2 id="private">MCP は Host からしか届かない</h2>
     <p>
       公式 MCP はプロセスに API キーを一つ持つ。誰が呼んでも同じスペースになる。
-      v3 の MCP は渡された space と token で Backlog を叩く。開いたプロキシにしないため、
-      呼び出し元が Host であることだけを JWT で証明する。
+      v3 の MCP は渡された space と token で Backlog を叩く。
+      呼び元の証明は JWT ではなく、ネットワークである。
+      Compose は MCP の port をホストに出さない。届くのは api コンテナだけである。
     </p>
     <p>
-      その証明はブラウザが MCP に直接渡すのではない。Chat のテナントは Host が知っている。
-      Host が HS256 の JWT を署名し、MCP が同じ秘密鍵で検証する。
       クライアントは自前 Host だけである。Cursor 向けの Dynamic Client Registration は実装しない。
-    </p>
-    <p>
-      JWT は <code>typ=mcp</code> の一種だけである。ユーザーの token を引くキーではない。
       token は Host の store にあり、tool 引数として渡す。
     </p>
-    <table>
-      <thead>
-        <tr><th></th><th><code>typ=mcp</code></th></tr>
-      </thead>
-      <tbody>
-        <tr><td>いつ発行するか</td><td>毎回のチャット</td></tr>
-        <tr><td>どこへ付けるか</td><td><code>/mcp</code> の Bearer</td></tr>
-        <tr><td><code>aud</code></td><td>付けない</td></tr>
-        <tr><td><code>iss</code></td><td>Host の公開 URL</td></tr>
-        <tr><td><code>sub</code> / <code>org</code></td><td>user_id / org_id。store のキーには使わない</td></tr>
-      </tbody>
-    </table>
     <pre><code class="language-plaintext">ブラウザ  --フォーム--&gt;  Host /backlog/connect  --Backlog OAuth--&gt;  そのスペースの token
-Host     --mcp JWT + tool引数(space, token)--&gt;  MCP /mcp  --渡された token--&gt;  Backlog API</code></pre>
+Host     --tool引数(space, token)--&gt;  MCP /mcp  --渡された token--&gt;  Backlog API</code></pre>
     <p>
-      検証は SDK の <code>token_verifier</code> に載せる。成功したら呼び出し元が Host だと分かる。
-      tool 本体は JWT を見ない。space と access_token は引数で来る。
+      MCP の <code>/mcp</code> に Bearer は付けない。v1 と同じく URL だけでセッションを開く。
     </p>
-    <pre><code class="language-python"># mcp/src/backlog_mcp/auth.py
-from mcp.server.auth.provider import AccessToken
-
-from .jwt_tokens import TokenError, decode_token
-
-
-class HostJwtVerifier:
-    def __init__(self, secret: str, issuer: str) -&gt; None:
-        self._secret = secret
-        self._issuer = issuer
-
-    async def verify_token(self, token: str) -&gt; AccessToken | None:
-        try:
-            payload = decode_token(
-                token,
-                self._secret,
-                "mcp",
-                issuer=self._issuer,
-            )
-        except TokenError:
-            return None
-        return AccessToken(
-            token=token,
-            client_id="chat-host",
-            scopes=["mcp"],
-            subject=payload["sub"],
-            claims={"org": payload["org"]},
-        )</code></pre>
-    <p>
-      <code>MCPServer</code> に渡すときは <code>AuthSettings(required_scopes=["mcp"])</code> を付ける。
-      <code>typ</code> が <code>mcp</code> でない JWT では <code>/mcp</code> を開けない。
-    </p>
+    <pre><code class="language-python"># backend/src/chat/agent.py
+async def open_mcp_session(settings: Settings) -&gt; AsyncIterator[ClientSession]:
+    async with (
+        streamable_http_client(settings.mcp_server_url) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        yield session</code></pre>
     <div class="why">
-      <strong>Host と MCP が同じ秘密鍵を持つ理由</strong>
-      これは第一者の Host だけがクライアントだから成立する。
-      不特定の IDE から繋ぐ設計にすると、秘密鍵の共有は破綻する。
-      そのときは Dynamic Client Registration や第三者の認可サーバーが必要になる。
-      v3 はその問題を解かない。解かないと決めたから、JWT の発行と検証を自分のコードとして読める。
+      <strong>JWT を置かない理由</strong>
+      Host と MCP は同じ infra にあり、MCP は private だけに置く。
+      その前提では共有秘密は重複する。port を公開した瞬間に
+      <code>list_issues</code> は任意ホストへの HTTP になるので、そのときは認証を足す。
     </div>
     <div class="check">
       <strong>STEP 2 の合格線</strong>
-      <code>typ=mcp</code> の JWT で <code>initialize</code> と <code>list_tools</code> が通る。
-      改ざんした token では <code>/mcp</code> が拒否する。
-      <code>/health</code> は Bearer なしで届く。
+      <code>compose.yaml</code> の mcp に <code>ports</code> が無い。
+      Host が Bearer なしで MCP セッションを開く。
     </div>
 
     <span class="label">STEP 3</span>
@@ -343,7 +286,7 @@ sequenceDiagram
       Host が覚えるのは接続の表である。メモリであり、再起動で消える。
     </p>
     <ol>
-      <li><code>connections</code> — <code>(user_id, domain) → Backlog access token</code></li>
+      <li><code>connections</code> — <code>(user_id, domain) → refresh token</code></li>
     </ol>
     <p>
       OAuth アプリは Host に 1 組である。
@@ -364,8 +307,7 @@ class Connection:
     user_id: str
     org_id: str
     domain: str
-    access_token: str
-    refresh_token: str | None = None
+    refresh_token: str
 
 
 @dataclass
@@ -382,7 +324,7 @@ class MemoryStore:
     <p>
       接続画面は Host の <code>/backlog/connect</code> に載せる。
       query の <code>user_id</code> と <code>org_id</code> を hidden field に載せる。
-      接続用の JWT は発行しない。フォームが Host 上にあるからである。
+      フォームが Host 上にあるから、ブラウザは MCP を直接叩かない。
     </p>
     <div class="note">
       <strong>Chat の org と Backlog のスペースは別物</strong>
@@ -407,6 +349,7 @@ class MemoryStore:
     <p>
       ここが v3 の中心である。Host がスペースと token を決める。
       MCP の tool は <code>list_issues(space, access_token)</code> だけである。
+      Host が毎回発行した値を渡す。
       未接続の判定は Host がする。LLM からは <code>list_connected_spaces</code> も見えるが、実装は Host である。
     </p>
     <table>
@@ -414,7 +357,7 @@ class MemoryStore:
         <tr><th>tool</th><th>すること</th></tr>
       </thead>
       <tbody>
-        <tr><td><code>list_connected_spaces</code></td><td>Host。そのユーザーが OAuth したスペースを返す。MCP は呼ばない</td></tr>
+        <tr><td><code>list_connected_spaces</code></td><td>Host。store の接続を返す。refresh に失敗したスペースも載る。MCP は呼ばない</td></tr>
         <tr><td><code>list_issues</code></td><td>MCP。<code>space</code> と <code>access_token</code> で課題を返す。未完了相当（status 1, 2, 3）がデフォルト</td></tr>
       </tbody>
     </table>
@@ -517,7 +460,7 @@ def test_resolve_one_connection_omits_space() -&gt; None:
     conn = resolve_connection(store, "alice", None)
     assert isinstance(conn, Connection)
     assert conn.domain == "acme.backlog.com"
-    assert conn.access_token == "tok-acme.backlog.com"
+    assert conn.refresh_token == "tok-acme.backlog.com"
 
 
 def test_resolve_two_connections_require_space() -&gt; None:
@@ -535,7 +478,7 @@ def test_resolve_rejects_foreign_and_other_users_space() -&gt; None:
             user_id="bob",
             org_id="org-1",
             domain="b.backlog.com",
-            access_token="tok-b",
+            refresh_token="tok-b",
         )
     )
     assert resolve_connection(store, "alice", "other.backlog.com") == UNKNOWN_SPACE
@@ -567,24 +510,18 @@ async def list_issues(
     <h2 id="host">Host に user と接続入口を足す</h2>
     <p>
       Host の loop は <a href="./v1.html#loop">v1</a> と同じである。
-      足すのは、MCP を開くときに JWT を付けることと、OAuth と token の注入である。
+      足すのは OAuth と token の注入である。
       スペース名も Backlog トークンも Host が持つ。MCP へは tool 引数で渡す。
     </p>
     <pre><code class="language-python"># backend/src/chat/agent.py
-async def open_mcp_session(
-    settings: Settings, user_id: str, org_id: str
-) -&gt; AsyncIterator[ClientSession]:
-    token = mcp_bearer_token(settings, user_id, org_id)
+async def open_mcp_session(settings: Settings) -&gt; AsyncIterator[ClientSession]:
     async with (
-        create_mcp_http_client(headers={"Authorization": f"Bearer {token}"}) as http_client,
-        streamable_http_client(settings.mcp_server_url, http_client=http_client) as (read, write),
+        streamable_http_client(settings.mcp_server_url) as (read, write),
         ClientSession(read, write) as session,
     ):
         yield session</code></pre>
     <p>
-      <code>mcp</code> 2.x の <code>streamable_http_client</code> は <code>http_client=</code> で
-      既存の HTTP クライアントを受け取る。ここに Authorization を載せる。
-      v1 のように URL 文字列だけ渡すと、Bearer が付かない。
+      v1 と同じく URL 文字列だけでセッションを開く。Authorization ヘッダは付けない。
     </p>
     <pre><code class="language-python"># backend/src/chat/api.py
 @app.post("/chat")
@@ -625,14 +562,15 @@ sequenceDiagram
 
   User->>FE: 未完了課題を教えて
   FE->>Host: POST /chat messages user_id org_id
-  Host->>Host: typ=mcp の JWT を署名
-  Host->>MCP: Streamable HTTP /mcp Bearer
+  Host->>Backlog: POST /api/v2/oauth2/token (refresh)
+  Backlog-->>Host: access_token
+  Host->>MCP: Streamable HTTP /mcp
   Host->>MCP: tools/list
   MCP-->>Host: list_issues
   Host->>Host: list_connected_spaces を schema に足す
   Host->>LLM: messages と tool schemas
   LLM-->>Host: tool_call list_issues
-  Host->>Host: store から space と token を決める
+  Host->>Host: session tokens（chat 開始時の refresh 結果）から space と access を決める
   Host->>MCP: tools/call list_issues with space and token
   MCP->>Backlog: GET /api/v2/issues
   Backlog-->>MCP: issues
@@ -645,8 +583,7 @@ sequenceDiagram
     <div class="check">
       <strong>STEP 5 の合格線</strong>
       <code>GET /backlog/connect</code> が接続フォームの HTML を返す。
-      <code>run_agent</code> が開く MCP セッションの Bearer は <code>typ=mcp</code> で、
-      <code>sub</code> が引数の <code>user_id</code> と一致する。実 MCP なしで検証できる。
+      <code>run_agent</code> が MCP セッションを開き、実 MCP なしで検証できる。
     </div>
 
     <span class="label">STEP 6</span>
@@ -695,11 +632,11 @@ cd v3/frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev</code></pre>
     </p>
     <ul>
       <li>公式イメージではなく、自前の MCP が Compose 上で HTTP 常駐している</li>
-      <li><code>/health</code> は認証なし、<code>/mcp</code> は <code>typ=mcp</code> の JWT だけを受け付ける</li>
+      <li><code>/health</code> は認証なし。<code>/mcp</code> も認証なしで、compose 内部からだけ届く</li>
       <li>接続は <code>GET /backlog/connect</code> の Host フォーム → Backlog OAuth であり、tool 結果に URL が無い</li>
       <li><code>connections</code> が Host のメモリにあり、OAuth アプリは Host の環境変数。MCP は渡された token で API を叩く</li>
       <li>接続 0 / 1 / 2 本以上の分岐と、他人のスペース拒否が、実 Backlog なしのテストで緑になる</li>
-      <li>Host の <code>run_tool_loop</code> は v1 と同じ不変条件を保ったまま、Bearer 付きで MCP を開く</li>
+      <li>Host の <code>run_tool_loop</code> は v1 と同じ不変条件を保ったまま、MCP を開く</li>
       <li>検証 UI の接続はフルページ GET で、チャット POST とは別の入口である</li>
     </ul>
     <p>

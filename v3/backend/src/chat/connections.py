@@ -8,6 +8,9 @@ NEED_SPACE = (
     "複数のスペースが接続されています。list_connected_spaces で確認し、space を指定してください。"
 )
 UNKNOWN_SPACE = "指定されたスペースはこのユーザーの接続にありません。"
+REFRESH_FAILED = (
+    "このスペースの再認証に失敗しました。画面の接続ボタンから接続し直してください。"
+)
 
 
 def connected_spaces(store: MemoryStore, user_id: str) -> list[dict[str, str]]:

@@ -71,3 +71,45 @@ async def exchange_code(
     refresh = body.get("refresh_token")
     refresh_token = refresh if isinstance(refresh, str) else None
     return access, refresh_token
+
+
+async def refresh_access_token(
+    http: httpx.AsyncClient,
+    domain: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+) -> tuple[str, str]:
+    """refresh token から access token を取り直す。
+
+    Args:
+        http: 差し込まれた HTTP クライアント。
+        domain: そのスペースのホスト名。
+        client_id: Host が環境変数から読む OAuth アプリ。
+        client_secret: 同上。
+        refresh_token: store が持っている refresh。
+
+    Returns:
+        (access_token, refresh_token)。レスポンスに refresh が無ければ引数の値。
+
+    Raises:
+        httpx.HTTPError: HTTP が失敗した場合。
+        RuntimeError: JSON に access_token が無い場合。
+    """
+    response = await http.post(
+        f"https://{domain}/api/v2/oauth2/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        },
+    )
+    response.raise_for_status()
+    body = response.json()
+    access = body.get("access_token")
+    if not isinstance(access, str) or not access:
+        raise RuntimeError("Backlog token response did not include access_token")
+    rotated = body.get("refresh_token")
+    new_refresh = rotated if isinstance(rotated, str) and rotated else refresh_token
+    return access, new_refresh

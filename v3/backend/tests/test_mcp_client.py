@@ -39,9 +39,22 @@ class FakeSession:
         )
 
 
+def _alice_store() -> MemoryStore:
+    store = MemoryStore()
+    store.put_connection(
+        Connection(
+            user_id="alice",
+            org_id="org-1",
+            domain="acme.backlog.com",
+            refresh_token="rtk-real",
+        )
+    )
+    return store
+
+
 @pytest.mark.anyio
 async def test_list_tools_hides_access_token_and_adds_connected_spaces() -> None:
-    mcp = BacklogMCP(FakeSession(), MemoryStore(), "alice")
+    mcp = BacklogMCP(FakeSession(), MemoryStore(), "alice", {})
     tools = await mcp.list_tools()
     names = [t["function"]["name"] for t in tools]
     assert "list_connected_spaces" in names
@@ -53,18 +66,14 @@ async def test_list_tools_hides_access_token_and_adds_connected_spaces() -> None
 
 
 @pytest.mark.anyio
-async def test_list_issues_injects_store_token_not_llm_token() -> None:
-    store = MemoryStore()
-    store.put_connection(
-        Connection(
-            user_id="alice",
-            org_id="org-1",
-            domain="acme.backlog.com",
-            access_token="tok-real",
-        )
-    )
+async def test_list_issues_injects_session_token_not_llm_token() -> None:
     session = FakeSession()
-    mcp = BacklogMCP(session, store, "alice")
+    mcp = BacklogMCP(
+        session,
+        _alice_store(),
+        "alice",
+        {"acme.backlog.com": "tok-session"},
+    )
     text = await mcp.call_tool(
         "list_issues",
         {"space": "acme.backlog.com", "access_token": "tok-forged"},
@@ -74,7 +83,7 @@ async def test_list_issues_injects_store_token_not_llm_token() -> None:
             "list_issues",
             {
                 "space": "acme.backlog.com",
-                "access_token": "tok-real",
+                "access_token": "tok-session",
                 "status_id": None,
             },
         )
@@ -83,9 +92,20 @@ async def test_list_issues_injects_store_token_not_llm_token() -> None:
 
 
 @pytest.mark.anyio
+async def test_list_issues_refresh_failed_does_not_call_mcp() -> None:
+    session = FakeSession()
+    mcp = BacklogMCP(session, _alice_store(), "alice", {})
+    text = await mcp.call_tool("list_issues", {"space": "acme.backlog.com"})
+    assert text == (
+        "このスペースの再認証に失敗しました。画面の接続ボタンから接続し直してください。"
+    )
+    assert session.calls == []
+
+
+@pytest.mark.anyio
 async def test_list_issues_unconnected_does_not_call_mcp() -> None:
     session = FakeSession()
-    mcp = BacklogMCP(session, MemoryStore(), "alice")
+    mcp = BacklogMCP(session, MemoryStore(), "alice", {})
     text = await mcp.call_tool("list_issues", {})
     assert text == "Backlog は未接続です。画面の接続ボタンから接続してください。"
     assert session.calls == []
@@ -99,11 +119,11 @@ async def test_list_connected_spaces_is_local() -> None:
             user_id="alice",
             org_id="org-1",
             domain="a.backlog.com",
-            access_token="tok-a",
+            refresh_token="tok-a",
         )
     )
     session = FakeSession()
-    mcp = BacklogMCP(session, store, "alice")
+    mcp = BacklogMCP(session, store, "alice", {})
     text = await mcp.call_tool("list_connected_spaces", {})
     assert "a.backlog.com" in text
     assert session.calls == []

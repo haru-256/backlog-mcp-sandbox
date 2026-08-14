@@ -480,7 +480,7 @@ async with streamable_http_client(url) as (read, write):
       v2 はこれに <code>DATABASE_URL</code>、<code>POSTGRES_PASSWORD</code>、
       timeout と tool 上限の設定を足す。詳細は v2.html に置く。
       v3 は <code>BACKLOG_DOMAIN</code> / <code>BACKLOG_API_KEY</code> を使わない。
-      代わりに <code>MCP_JWT_SECRET</code>、<code>MCP_PUBLIC_URL</code>、<code>HOST_PUBLIC_URL</code> を Host と MCP の両方で使う。
+      代わりに <code>HOST_PUBLIC_URL</code> を Host が使う。MCP は compose 内部のみで、JWT は置かない。
       <code>FRONTEND_PUBLIC_URL</code>、<code>BACKLOG_CLIENT_ID</code>、<code>BACKLOG_CLIENT_SECRET</code> は Host だけが使う。詳細は v3.html に置く。
     </p>
     <div class="note">

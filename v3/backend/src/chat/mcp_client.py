@@ -5,7 +5,7 @@ from mcp import ClientSession
 from mcp.types import TextContent
 from openai.types.chat import ChatCompletionToolParam
 
-from .connections import connected_spaces, resolve_connection
+from .connections import REFRESH_FAILED, connected_spaces, resolve_connection
 from .store import MemoryStore
 
 _CONNECTED_SPACES_TOOL: ChatCompletionToolParam = {
@@ -31,17 +31,25 @@ def _hide_access_token(schema: dict[str, Any]) -> dict[str, Any]:
 class BacklogMCP:
     """MCP サーバーに接続するためのクライアント。"""
 
-    def __init__(self, session: ClientSession, store: MemoryStore, user_id: str) -> None:
+    def __init__(
+        self,
+        session: ClientSession,
+        store: MemoryStore,
+        user_id: str,
+        access_tokens: dict[str, str],
+    ) -> None:
         """セッションと、token を注入するための store を保持する。
 
         Args:
             session: MCP サーバーとの通信を行うセッション。
             store: Host が持つ接続表。
             user_id: Chat 上のユーザー ID。
+            access_tokens: domain → この chat 用に発行した access token。
         """
         self._session: ClientSession = session
         self._store: MemoryStore = store
         self._user_id: str = user_id
+        self._access_tokens: dict[str, str] = access_tokens
 
     async def list_tools(self) -> list[ChatCompletionToolParam]:
         """OpenAI 形式の tools を返す。access_token は schema から除く。
@@ -73,7 +81,7 @@ class BacklogMCP:
 
         tool 自身のエラーは例外にせず "tool error: ..." で返す。
         tool が見つからない等のプロトコル階層の失敗は例外として扱う。
-        list_issues の access_token は store の値で上書きする。LLM 由来の値は捨てる。
+        list_issues の access_token は session tokens の値で上書きする。LLM 由来の値は捨てる。
 
         Args:
             name: 呼び出す tool 名。
@@ -92,9 +100,12 @@ class BacklogMCP:
             resolved = resolve_connection(self._store, self._user_id, arguments.get("space"))
             if isinstance(resolved, str):
                 return resolved
+            token = self._access_tokens.get(resolved.domain)
+            if token is None:
+                return REFRESH_FAILED
             arguments = {
                 "space": resolved.domain,
-                "access_token": resolved.access_token,
+                "access_token": token,
                 "status_id": arguments.get("status_id"),
             }
         else:

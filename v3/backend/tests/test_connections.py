@@ -16,7 +16,7 @@ def _store_with(user: str, domains: list[str]) -> MemoryStore:
                 user_id=user,
                 org_id="org-1",
                 domain=domain,
-                access_token=f"tok-{domain}",
+                refresh_token=f"rtk-{domain}",
             )
         )
     return store
@@ -29,7 +29,7 @@ def test_connected_spaces_only_that_user() -> None:
             user_id="bob",
             org_id="org-1",
             domain="c.backlog.com",
-            access_token="tok-c",
+            refresh_token="rtk-c",
         )
     )
     listed = connected_spaces(store, "alice")
@@ -45,7 +45,7 @@ def test_resolve_one_connection_omits_space() -> None:
     conn = resolve_connection(store, "alice", None)
     assert isinstance(conn, Connection)
     assert conn.domain == "acme.backlog.com"
-    assert conn.access_token == "tok-acme.backlog.com"
+    assert conn.refresh_token == "rtk-acme.backlog.com"
 
 
 def test_resolve_two_connections_require_space() -> None:
@@ -63,7 +63,7 @@ def test_resolve_rejects_foreign_and_other_users_space() -> None:
             user_id="bob",
             org_id="org-1",
             domain="b.backlog.com",
-            access_token="tok-b",
+            refresh_token="rtk-b",
         )
     )
     assert resolve_connection(store, "alice", "other.backlog.com") == UNKNOWN_SPACE

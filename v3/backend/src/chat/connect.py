@@ -1,4 +1,4 @@
-"""チャット外の Backlog OAuth。`/mcp` の JWT は使わない。
+"""チャット外の Backlog OAuth。
 
 流れは三つだけである。
 
@@ -97,7 +97,7 @@ async def handle_callback(
 
     try:
         async with httpx.AsyncClient() as http:
-            access, refresh = await exchange_code(
+            _access, refresh = await exchange_code(
                 http,
                 pending.domain,
                 settings.backlog_client_id,
@@ -108,12 +108,14 @@ async def handle_callback(
     except (httpx.HTTPError, RuntimeError):
         return error_page("Backlog のトークン交換に失敗しました。", status=502)
 
+    if refresh is None:
+        return error_page("Backlog が refresh token を返しませんでした。接続ボタンからやり直してください。")
+
     store.put_connection(
         Connection(
             user_id=pending.user_id,
             org_id=pending.org_id,
             domain=pending.domain,
-            access_token=access,
             refresh_token=refresh,
         )
     )

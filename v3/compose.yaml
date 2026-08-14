@@ -4,11 +4,8 @@ services:
   mcp:
     build: ./mcp
     environment:
-      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-change-me-please!!}
-      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:3333}
-      HOST_PUBLIC_URL: ${HOST_PUBLIC_URL:-http://localhost:8003}
-    ports:
-      - "3333:3333"
+      PORT: 3333
+      LOG_FORMAT: ${LOG_FORMAT:-human}
     healthcheck:
       test:
         [
@@ -29,9 +26,7 @@ services:
       OPENCODE_GO_BASE_URL: ${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}
       OPENCODE_GO_MODEL: ${OPENCODE_GO_MODEL:-deepseek-v4-flash}
       MCP_SERVER_URL: http://mcp:3333/mcp
-      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:3333}
       HOST_PUBLIC_URL: ${HOST_PUBLIC_URL:-http://localhost:8003}
-      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-change-me-please!!}
       BACKLOG_CLIENT_ID: ${BACKLOG_CLIENT_ID}
       BACKLOG_CLIENT_SECRET: ${BACKLOG_CLIENT_SECRET}
       FRONTEND_PUBLIC_URL: ${FRONTEND_PUBLIC_URL:-http://localhost:5173}

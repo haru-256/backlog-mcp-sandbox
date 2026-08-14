@@ -3,10 +3,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Protocol, cast
 
+import httpx
 from loguru import logger
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared._httpx_utils import create_mcp_http_client
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionMessageParam,
@@ -17,9 +17,9 @@ from openai.types.chat.chat_completion_tool_message_param import (
 )
 from pydantic import TypeAdapter
 
-from .jwt_tokens import sign_token
 from .llm import OpencodeGoLLM
 from .mcp_client import BacklogMCP
+from .session_tokens import issue_session_tokens
 from .settings import Settings
 from .store import MemoryStore
 
@@ -98,37 +98,12 @@ class MCPCaller(Protocol):
         ...
 
 
-def mcp_bearer_token(settings: Settings, user_id: str, org_id: str) -> str:
-    """MCP の `/mcp` に付ける Host 署名 JWT を発行する。
-
-    Args:
-        settings: JWT 秘密鍵・issuer・TTL を含む設定。
-        user_id: Chat 上のユーザー ID。JWT の `sub`。
-        org_id: Chat テナント ID。JWT の `org`。
-
-    Returns:
-        HS256 で署名した JWT 文字列。
-    """
-    return sign_token(
-        secret=settings.mcp_jwt_secret,
-        typ="mcp",
-        user_id=user_id,
-        org_id=org_id,
-        issuer=settings.host_public_url,
-        ttl_seconds=settings.mcp_token_ttl_seconds,
-    )
-
-
 @asynccontextmanager
-async def open_mcp_session(
-    settings: Settings, user_id: str, org_id: str
-) -> AsyncIterator[ClientSession]:
-    """JWT 付きで MCP の Streamable HTTP セッションを開く。
+async def open_mcp_session(settings: Settings) -> AsyncIterator[ClientSession]:
+    """MCP の Streamable HTTP セッションを開く。
 
     Args:
-        settings: MCP URL と JWT 発行に使う設定。
-        user_id: Chat 上のユーザー ID。
-        org_id: Chat テナント ID。
+        settings: MCP URL を含む設定。
 
     Yields:
         初期化前の `ClientSession`。呼び出し側が `initialize` する。
@@ -136,10 +111,8 @@ async def open_mcp_session(
     Raises:
         接続失敗時は MCP / HTTP クライアント側の例外。
     """
-    token = mcp_bearer_token(settings, user_id, org_id)
     async with (
-        create_mcp_http_client(headers={"Authorization": f"Bearer {token}"}) as http_client,
-        streamable_http_client(settings.mcp_server_url, http_client=http_client) as (read, write),
+        streamable_http_client(settings.mcp_server_url) as (read, write),
         ClientSession(read, write) as session,
     ):
         yield session
@@ -157,9 +130,9 @@ async def run_agent(
     Args:
         messages: 直近の会話履歴。OpenAI 形式の messages。
         settings: エージェントの設定。
-        user_id: Chat 上のユーザー ID。MCP JWT の `sub`。
-        org_id: Chat テナント ID。MCP JWT の `org`。
-        store: Host が持つ接続表。MCP に渡す token の出どころ。
+        user_id: Chat 上のユーザー ID。接続表のキー。
+        org_id: Chat テナント ID。接続時に store へ書いた値。MCP には渡さない。
+        store: 接続表（refresh token）。access token は `issue_session_tokens` が chat 開始時に発行する。
 
     Returns:
         入力に LLM / tool 行を足した会話履歴。末尾は assistant。
@@ -171,10 +144,18 @@ async def run_agent(
         json.JSONDecodeError: LLM が返した tool 引数が JSON でない場合。
     """
     llm = OpencodeGoLLM(settings)
-    async with open_mcp_session(settings, user_id, org_id) as session:
+    async with httpx.AsyncClient() as http:
+        access_tokens = await issue_session_tokens(
+            http,
+            store,
+            user_id,
+            settings.backlog_client_id,
+            settings.backlog_client_secret,
+        )
+    async with open_mcp_session(settings) as session:
         logger.debug(f"initialize mcp session: {settings.mcp_server_url}")
         await session.initialize()
-        mcp = BacklogMCP(session, store, user_id)
+        mcp = BacklogMCP(session, store, user_id, access_tokens)
         result = await run_tool_loop(messages, llm, mcp, settings.max_tool_calls)
         if result[-1].get("role") != "assistant":
             raise RuntimeError("The last message is not from the assistant.")

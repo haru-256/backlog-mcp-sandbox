@@ -1,13 +1,13 @@
 """Host がメモリに持つ二つの表。再起動で消える。
 
-Host は connections に (user_id, domain) → Backlog token を持つ。
+Host は connections に (user_id, domain) → refresh token を持つ。
 OAuth アプリ（client_id / secret）は Settings が環境変数から読む。ここには置かない。
 
 +------------------+----------------------------------+
 | 表               | キー → 値                        |
 +------------------+----------------------------------+
 | connections      | (user_id, domain) →              |
-|                  | その人が同意した Backlog token   |
+|                  | その人が同意した refresh token   |
 | pending          | Backlog に渡した state →         |
 |                  | 認可が戻ってくるまでの仮データ   |
 +------------------+----------------------------------+
@@ -22,17 +22,15 @@ class Connection:
 
     Attributes:
         user_id: Chat 上のユーザー ID。
-        org_id: Chat テナント ID。JWT の `org`。
+        org_id: Chat テナント ID。
         domain: 接続したスペースのホスト名。
-        access_token: その人が同意した Backlog token。
-        refresh_token: 更新用。無いときは None。
+        refresh_token: access token を取り直すための token。
     """
 
     user_id: str
     org_id: str
     domain: str
-    access_token: str
-    refresh_token: str | None = None
+    refresh_token: str
 
 
 @dataclass

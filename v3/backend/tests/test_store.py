@@ -26,7 +26,7 @@ def test_store_keys_by_user_and_domain() -> None:
             user_id="alice",
             org_id="org-1",
             domain="a.backlog.com",
-            access_token="tok-a",
+            refresh_token="rtk-a",
         )
     )
     store.put_connection(
@@ -34,11 +34,13 @@ def test_store_keys_by_user_and_domain() -> None:
             user_id="bob",
             org_id="org-1",
             domain="a.backlog.com",
-            access_token="tok-bob",
+            refresh_token="rtk-bob",
         )
     )
-    assert store.get_connection("alice", "a.backlog.com") is not None
-    assert store.get_connection("alice", "a.backlog.com").access_token == "tok-a"
+    alice = store.get_connection("alice", "a.backlog.com")
+    assert alice is not None
+    assert alice.refresh_token == "rtk-a"
+    assert not hasattr(alice, "access_token")
     assert [c.domain for c in store.list_connections("alice")] == ["a.backlog.com"]
     assert store.get_connection("alice", "missing.backlog.com") is None
 
