@@ -16,8 +16,8 @@
       <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
       <h1>共通の地図<br />Backlog MCP Host を自分で作る</h1>
       <p class="lede">
-        v1・v2・v3 が共有する原理をここに置く。tool loop とは何か、Host / Client / Server はどのプロセスか、
-        なぜ MCP を HTTP で常駐させるのか、「セッション」と「ストリーム」がどちらも二つあるのはなぜか。
+      v1・v2・v3・v4 が共有する原理をここに置く。tool loop とは何か、Host / Client / Server はどのプロセスか、
+      なぜ MCP を HTTP で常駐させるのか（v1–v3）、「セッション」と「ストリーム」がどちらも二つあるのはなぜか。
         手順に入る前に、この地図を読む。
       </p>
       <nav class="series" aria-label="この教材の構成">
@@ -25,6 +25,7 @@
         <a href="./v1.html">v1 ステートレス Host</a>
         <a href="./v2.html">v2 セッションと SSE</a>
         <a href="./v3.html">v3 自作 MCP</a>
+        <a href="./v4.html">v4 同一プロセス</a>
       </nav>
     </div>
   </header>
@@ -61,11 +62,14 @@
       <strong>v3</strong> は Server 側を自分で書く。公式を外すのは、スペースと token を Host が持ち、MCP は渡された値で API を叩くためである。
       三つの版は<strong>コードを共有しない</strong>独立したアプリケーションである。
       共通ライブラリにまとめると、実装を並べて差分を読むという学習手段が失われるためである。
+      <strong>v4</strong> は v3 の Server を Host と同じプロセスのモジュールにする。
+      HTTP 常駐は v1–v3 の話である。v4 の手順は <a href="./v4.html">v4 学習書</a> に置く。
     </p>
     <p>
       一方でこの文書は共有する。原理は版によって変わらないからだ。
       各版の HTML には、その版でしか意味を持たない手順だけを置く。
       読む順序は index、v1 のあと、<a href="./v2.html">v2</a> と <a href="./v3.html">v3</a> はどちらでもよい。
+      v4 は v3 を終えてから読む。
       v2 は Host を厚くする軸、v3 は Server を書く軸である。
       どちらも v1 を終えていることを前提にし、tool loop を最初から説明し直さない。
     </p>
@@ -498,6 +502,7 @@ async with streamable_http_client(url) as (read, write):
       <li><a href="./v1.html">v1 学習書</a> — ステートレスな Host。tool loop を CLI で書き、FastAPI で包む</li>
       <li><a href="./v2.html">v2 学習書</a> — 会話の永続化、SSE、制限と失敗の契約、監査。v1 を終えてから読む</li>
       <li><a href="./v3.html">v3 学習書</a> — 自作 MCP Server。明示接続と複数スペース。v1 を終えてから読む</li>
+      <li><a href="./v4.html">v4 学習書</a> — 同一プロセスの自作 MCP。v3 を終えてから読む</li>
     </ul>
     <p>
       この地図に戻ってくるのは、実装中に「いま自分はどちらのセッションの話をしているのか」が
@@ -511,7 +516,8 @@ async with streamable_http_client(url) as (read, write):
       <a href="./index.html">共通の地図</a> ／
       <a href="./v1.html">v1</a> ／
       <a href="./v2.html">v2</a> ／
-      <a href="./v3.html">v3</a>
+      <a href="./v3.html">v3</a> ／
+      <a href="./v4.html">v4</a>
     </p>
   </footer>
 

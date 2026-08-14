@@ -2,16 +2,19 @@
 
 学習用サンドボックス。公式 Backlog MCP と自前 Host をつなぐ Chat API を、v1 → v2 で段階的に理解する。
 v3 は同じ Host の形のまま、MCP Server 側を自分で書く。
+v4 は自作 MCP を Host と同じプロセスのモジュールにする。
 
 ## 学習ガイド
 
 `docs/guide` を読む。共通の地図が原理を持ち、各版はその版の手順だけを持つ。
 v1 のあと、v2（Host を厚くする）と v3（Server を書く）はどちらからでもよい。
+v4 は v3 を終えてから読む。
 
 1. [`docs/guide/index.html`](docs/guide/index.html) — 共通の地図。tool loop、Host / Client / Server、二種類のセッションとストリーム、MCP を HTTP で常駐させる理由
 2. [`docs/guide/v1.html`](docs/guide/v1.html) — v1。ステートレス Host。tool loop を書き、FastAPI で包む
 3. [`docs/guide/v2.html`](docs/guide/v2.html) — v2。セッション永続化、SSE、制限と失敗の契約、監査。v1 を前提とする
 4. [`docs/guide/v3.html`](docs/guide/v3.html) — v3。自作 MCP Server。明示接続と複数スペース。v1 を前提とする
+5. [`docs/guide/v4.html`](docs/guide/v4.html) — v4。同一プロセスの自作 MCP。v3 を前提とする
 
 ガイドは、**学習対象になるコードを渡さない**。`run_tool_loop` と `stream_turn` は、
 満たすべき不変条件と、自分で通せるテストだけを置いてある。
@@ -46,3 +49,16 @@ cd v3/frontend && pnpm install && pnpm dev
 ```
 
 検証 UI で `user_id` / `org_id` を入れ、「Backlog を接続」からスペースを追加してからチャットする。
+
+### v4（同一プロセスの自作 MCP）
+
+自作 Backlog MCP は Host と同じプロセスのモジュールである。Chat API は `8004`。MCP 用のコンテナは無い。
+
+役割分担は [v4/README.md](v4/README.md) と [docs/guide/v4.html](docs/guide/v4.html) にある。Backlog アプリの Redirect URI に `http://localhost:8004/backlog/callback` を足す。
+
+```bash
+cd v4 && docker compose up
+cd v4/frontend && pnpm install && pnpm dev
+```
+
+検証 UI で `user_id` / `org_id` を入れ、「Backlog を接続」してからチャットする。1 ユーザーは 1 スペース。再接続すると上書きする。
