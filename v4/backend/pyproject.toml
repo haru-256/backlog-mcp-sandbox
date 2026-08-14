@@ -1,0 +1,53 @@
+[project]
+name = "chat"
+version = "0.1.0"
+description = "v4 Chat API host for the in-process Backlog MCP"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "backlog-mcp",
+  "fastapi>=0.141.1,<0.141.2",
+  "httpx>=0.28.1,<0.29.0",
+  "loguru>=0.7.3,<0.7.4",
+  "mcp>=2.0.0,<2.1.0",
+  "openai>=2.53.0,<2.54.0",
+  "pydantic-settings>=2.15.0,<2.16.0",
+  "python-multipart>=0.0.20,<1.0.0",
+  "typer>=0.27.1,<0.27.2",
+  "uvicorn>=0.52.1,<0.52.2",
+]
+
+[dependency-groups]
+dev = [
+  "anyio>=4.14.2,<4.15.0",
+  "mypy>=2.3.0,<2.4.0",
+  "pytest>=9.1.1,<9.2.0",
+  "ruff>=0.16.2,<0.16.3",
+]
+
+[project.scripts]
+chat = "chat:main"
+
+[tool.uv.sources]
+backlog-mcp = { path = "modules/backlog-mcp", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.13"
+exclude = [".venv"]
+follow_imports = "silent"
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_generics = true
+no_implicit_reexport = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "modules/backlog-mcp/tests"]

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>v4 学習書: 同一プロセスの MCP</title>
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css"
+        integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="./assets/guide.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="inner">
+      <p class="eyebrow">backlog-mcp-sandbox / docs / guide</p>
+      <h1>v4 学習書<br />自作 MCP を Host と同じプロセスに載せる</h1>
+      <p class="lede">
+        v3 で書いた Server を、モジュールとして Host に入れる。
+        口は MCP の <code>Client</code> のままである。プロセスは一つ。
+        1 ユーザーは 1 スペース。
+      </p>
+      <nav class="series" aria-label="この教材の構成">
+        <a href="./index.html">共通の地図</a>
+        <a href="./v1.html">v1 ステートレス Host</a>
+        <a href="./v2.html">v2 セッションと SSE</a>
+        <a href="./v3.html">v3 自作 MCP</a>
+        <a href="./v4.html" aria-current="page">v4 同一プロセス</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="目次">
+      <strong>目次</strong>
+      <ol>
+        <li><span class="kind">OVERVIEW</span> <a href="#what">v4 で達成すること</a></li>
+        <li><span class="kind">STEP 1</span> <a href="#module">modules/backlog-mcp はライブラリである</a></li>
+        <li><span class="kind">STEP 2</span> <a href="#client">高水準 Client がトランスポートを隠す</a></li>
+        <li><span class="kind">STEP 3</span> <a href="#hub">McpHub が prefix して束ねる</a></li>
+        <li><span class="kind">STEP 4</span> <a href="#onespace">1 ユーザー 1 スペースは Host の約束</a></li>
+        <li><span class="kind">STEP 5</span> <a href="#connect">接続はチャットの外。2 本目は上書き</a></li>
+        <li><span class="kind">STEP 6</span> <a href="#frontend">検証用フロント</a></li>
+        <li><span class="kind">WRAP UP</span> <a href="#end">到達点を確かめる</a></li>
+      </ol>
+    </nav>
+
+    <div class="note">
+      <strong>この文書は v3 を終えていることを前提にする</strong>
+      token は Host が持ち、MCP は渡された space と access で API を叩く。
+      その境界は <a href="./v3.html">v3 学習書</a> にある。
+      tool loop の不変条件は <a href="./index.html">共通の地図</a> と
+      <a href="./v1.html">v1 学習書</a> にある。
+      v2 のセッションや SSE は前提にしない。
+    </div>
+
+    <span class="label">OVERVIEW</span>
+    <h2 id="what">v4 で達成すること</h2>
+    <p>
+      v3 は Host と MCP を別プロセスにし、Streamable HTTP の <code>/mcp</code> でつないだ。
+      v4 は同じ Server を <code>backend/modules/backlog-mcp</code> に置き、Host と同じプロセスで動かす。
+      口は MCP のままである。変わるのはトランスポートだけである。
+    </p>
+    <p>
+      目的は Backlog 製品を完成させることではない。次の問いに、コードで答えられるようにすることである。
+    </p>
+    <ul>
+      <li>Host / Client / Server は、どのプロセスのどのファイルか</li>
+      <li><code>Client(server)</code> と <code>Client(url)</code> は、Host から見て何が同じか</li>
+      <li>なぜ HTTP の <code>/mcp</code> をやめたか</li>
+      <li>1 ユーザー 1 スペースは、MCP の tool 引数ではなく Host の約束である理由</li>
+    </ul>
+    <table>
+      <thead>
+        <tr><th>観点</th><th>v3</th><th>v4</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>プロセス</td><td>api と mcp の二つ</td><td>api 一つ</td></tr>
+        <tr><td>Host→MCP</td><td><code>ClientSession</code> + Streamable HTTP</td><td><code>Client(server)</code> または <code>Client(url)</code></td></tr>
+        <tr><td>自作 MCP の口</td><td><code>/mcp</code>（compose 内部）</td><td>メモリ。HTTP 口は無い</td></tr>
+        <tr><td>複数 MCP</td><td>自作 1 本</td><td><code>mcp_servers</code> リスト。id で prefix</td></tr>
+        <tr><td>スペース</td><td>1 ユーザーが複数</td><td>1 ユーザー 1 本。上書き</td></tr>
+      </tbody>
+    </table>
+
+    <h3>API</h3>
+    <table>
+      <thead>
+        <tr><th>プロセス</th><th>メソッド</th><th>パス</th><th>意味</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Host</td><td><code>POST</code></td><td><code>/chat</code></td><td>messages と user / org を受け、loop を回す</td></tr>
+        <tr><td>Host</td><td><code>GET</code> / <code>POST</code></td><td><code>/backlog/connect</code></td><td>スペース入力と Backlog OAuth への 302</td></tr>
+        <tr><td>Host</td><td><code>GET</code></td><td><code>/backlog/callback</code></td><td>認可コードを token に交換する。既存接続は上書き</td></tr>
+        <tr><td>Host</td><td><code>GET</code></td><td><code>/health</code></td><td>プロセスが応答できることを示す</td></tr>
+      </tbody>
+    </table>
+    <p>
+      MCP の HTTP パスは無い。Cursor からこの MCP につなぐ想定はない。
+    </p>
+
+    <h3>置き場</h3>
+    <pre><code class="language-plaintext">v4/
+├── compose.yaml                 # api だけ
+├── backend/
+│   ├── src/chat/                # Host。McpHub
+│   └── modules/backlog-mcp/     # MCP Server ライブラリ
+└── frontend/</code></pre>
+    <p>
+      ポートは Host が <code>8004</code>、検証 UI が <code>5174</code> である。
+      v3 の <code>8003</code> / <code>5173</code> と同時に起動してもぶつからない。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart LR
+  User --> FE[frontend]
+  FE --> Host[Host_Chat_API]
+  Host --> LLM
+  Host --> Hub[McpHub]
+  Hub -->|"Client(server)"| BacklogMCP[backlog_mcp]
+  Hub -->|"Client(url)"| ExtMCP[external_MCP]
+  BacklogMCP --> BacklogAPI[Backlog_API]
+      </div>
+    </div>
+
+    <span class="label">STEP 1</span>
+    <h2 id="module">modules/backlog-mcp はライブラリである</h2>
+    <p>
+      v3 の <code>v3/mcp</code> は自分でポートを待ち受けた。
+      v4 のパッケージは <code>create_server</code> が <code>MCPServer</code> を返すだけである。
+      <code>run()</code> も <code>/health</code> も無い。
+    </p>
+    <pre><code class="language-python"># backend/modules/backlog-mcp/src/backlog_mcp/server.py
+from mcp.server.mcpserver import MCPServer
+
+
+def create_server(settings: Settings, api: BacklogApi | None = None) -&gt; MCPServer[None]:
+    server = MCPServer(
+        name="backlog-mcp",
+        instructions="Backlog 課題を、渡されたスペースと token に対して一覧する。",
+    )
+
+    @server.tool()
+    async def list_issues(space: str, access_token: str, status_id: int | None = None) -&gt; str:
+        return await run_list_issues(
+            backlog, space=space, access_token=access_token,
+            status_id=status_id, count=settings.issue_limit,
+        )
+
+    return server</code></pre>
+    <p>
+      Host は uv の path 依存でこれを読む。
+    </p>
+    <pre><code class="language-toml"># backend/pyproject.toml
+dependencies = [
+  "backlog-mcp",
+  # ...
+]
+
+[tool.uv.sources]
+backlog-mcp = { path = "modules/backlog-mcp", editable = true }</code></pre>
+    <p>
+      <code>list_issues</code> の引数は v3 と同じである。
+      <code>space</code> と <code>access_token</code> を要求する。
+      1 ユーザー 1 スペースは、この関数の約束ではない。
+    </p>
+
+    <span class="label">STEP 2</span>
+    <h2 id="client">高水準 Client がトランスポートを隠す</h2>
+    <p>
+      v1 / v3 は低水準の <code>ClientSession</code> と <code>streamable_http_client</code> を使った。
+      <code>initialize</code> の往復をコード上に置くためである。
+      共通の地図にも「その事実が要らなくなったら <code>Client</code> に移してよい」と書いてある。
+    </p>
+    <p>
+      v4 で見せたいのはその往復ではない。
+      自作と外部を、同じ口で束ねることである。
+    </p>
+    <pre><code class="language-python">from mcp import Client
+
+async with Client(server) as client:
+    listed = await client.list_tools()
+
+async with Client("http://example.invalid/mcp") as client:
+    listed = await client.list_tools()</code></pre>
+    <p>
+      渡した値の型でトランスポートが決まる。
+      サーバーオブジェクトなら同一プロセス。
+      URL 文字列なら Streamable HTTP。
+      <code>list_tools</code> / <code>call_tool</code> は同じである。
+    </p>
+    <div class="note">
+      <strong>in-process は JSON-RPC のフレームを省略することがある</strong>
+      Host から見えるのは MCP の tool 契約である。
+      バイト列としてのプロトコルを揃えたいわけではない。
+    </div>
+
+    <span class="label">STEP 3</span>
+    <h2 id="hub">McpHub が prefix して束ねる</h2>
+    <p>
+      Host の loop は <code>McpHub</code> だけを見る。
+      どのサーバーがメモリで、どれが HTTP かは、接続を開く 1 箇所だけが知る。
+    </p>
+    <p>
+      LLM に渡す tool 名は <code>{id}_{元の名前}</code> である。
+      例は <code>backlog_list_issues</code>。
+      id は <code>^[a-z][a-z0-9]{0,31}$</code> で、underscore を入れない。
+      振り分けは最長一致である。
+    </p>
+    <pre><code class="language-json">[
+  {"id": "backlog", "kind": "inprocess"},
+  {"id": "docs", "kind": "http", "url": "https://example.invalid/mcp"}
+]</code></pre>
+    <p>
+      環境変数は <code>MCP_SERVERS</code>。
+      既定は backlog の inprocess 1 本である。
+      <code>kind=inprocess</code> の id は、Host の <code>create_inprocess_server</code> に無いと
+      <code>ValueError</code> になる。
+      v4 が知っている id は <code>backlog</code> だけである。
+    </p>
+    <p>
+      schema から <code>space</code> と <code>access_token</code> を除くのも Hub である。
+      LLM が付けてきた token は捨てる。
+    </p>
+
+    <span class="label">STEP 4</span>
+    <h2 id="onespace">1 ユーザー 1 スペースは Host の約束</h2>
+    <p>
+      v3 は 1 ユーザーが複数スペースを持てた。
+      LLM は <code>list_connected_spaces</code> で候補を見し、<code>space</code> を選んだ。
+      v4 はその選択を Host に移す。
+      学びを「複数 MCP の束ね方」に寄せるためである。
+    </p>
+    <p>
+      store のキーは <code>user_id</code> である。
+      同じユーザーの 2 本目の OAuth は、旧行を置き換える。
+      切断 API は無い。
+    </p>
+    <p>
+      未接続なら tool 結果は「接続ボタンから」である。
+      refresh 失敗なら「接続し直してください」である。
+      どちらにも URL は付けない。
+    </p>
+
+    <span class="label">STEP 5</span>
+    <h2 id="connect">接続はチャットの外。2 本目は上書き</h2>
+    <p>
+      OAuth は「課題を教えて」の途中では始まらない。
+      流れは v3 と同じである。callback が書く先が、その user の 1 行になる。
+    </p>
+    <div class="diagram">
+      <div class="mermaid">
+sequenceDiagram
+  participant User
+  participant FE as frontend
+  participant Host as backend_api
+  participant Backlog
+
+  User-&gt;&gt;FE: Backlog を接続
+  FE-&gt;&gt;Host: GET /backlog/connect?user_id&amp;org_id
+  User-&gt;&gt;Host: スペースを入力
+  Host-&gt;&gt;Backlog: 302 OAuth2AccessRequest
+  User-&gt;&gt;Backlog: 同意
+  Backlog-&gt;&gt;Host: GET /backlog/callback?code
+  Host-&gt;&gt;Backlog: code を token に交換
+  Host-&gt;&gt;Host: connections に user の 1 行を上書き
+  Host-&gt;&gt;FE: 302 ?connected=1
+      </div>
+    </div>
+    <p>
+      Backlog アプリの Redirect URI は
+      <code>http://localhost:8004/backlog/callback</code> である。
+      v3 の <code>8003</code> とは別なので、Developer サイトにこの URI を足す。
+    </p>
+
+    <span class="label">STEP 6</span>
+    <h2 id="frontend">検証用フロント</h2>
+    <p>
+      検証 UI は v3 と同じく Compose に載せない。
+      <code>VITE_API_BASE_URL</code> は <code>http://localhost:8004</code>。
+      vite の port は <code>5174</code> である。
+    </p>
+    <pre><code class="language-bash">cd v4 && docker compose up
+cd v4/frontend && pnpm install && pnpm dev</code></pre>
+    <p>
+      接続リンクの文言は「Backlog を接続（既存があれば上書き）」である。
+    </p>
+
+    <span class="label">WRAP UP</span>
+    <h2 id="end">到達点を確かめる</h2>
+    <ul>
+      <li><code>v4/compose.yaml</code> に mcp サービスが無い</li>
+      <li><code>ClientSession</code> / <code>streamable_http_client</code> / <code>MCP_SERVER_URL</code> が <code>v4/backend</code> に無い</li>
+      <li>LLM に渡る tool 名が <code>backlog_list_issues</code> である</li>
+      <li>同じ user で 2 スペース OAuth すると、store は後者だけである</li>
+      <li><code>cd v4/backend && uv run pytest</code> が緑である</li>
+    </ul>
+    <p>
+      ここまで追えれば、同一プロセスでも口は MCP であり、
+      外部 MCP を足すときは <code>mcp_servers</code> に URL を 1 行足せばよい、と説明できる。
+    </p>
+    <p>
+      別プロセスの HTTP 常駐は <a href="./v3.html">v3 学習書</a> に残してある。
+      対比して読む。
+    </p>
+  </main>
+
+  <footer>
+    <p>
+      backlog-mcp-sandbox 学習ガイド。
+      <a href="./index.html">共通の地図</a> ／
+      <a href="./v1.html">v1</a> ／
+      <a href="./v2.html">v2</a> ／
+      <a href="./v3.html">v3</a> ／
+      <a href="./v4.html">v4</a>
+    </p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+          integrity="sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"
+          integrity="sha384-aBQXj4hK6Jm05i7aQAsUV3bLdSUrHX1BGYfMB0166TtWt/RRaw+h0Eelme9OCOvy"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="./assets/guide.js"></script>
+</body>
+</html>

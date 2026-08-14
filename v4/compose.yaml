@@ -1,0 +1,28 @@
+name: backlog-mcp-sandbox-v4
+
+services:
+  api:
+    build: ./backend
+    environment:
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY}
+      OPENCODE_GO_BASE_URL: ${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}
+      OPENCODE_GO_MODEL: ${OPENCODE_GO_MODEL:-deepseek-v4-flash}
+      HOST_PUBLIC_URL: ${HOST_PUBLIC_URL:-http://localhost:8004}
+      BACKLOG_CLIENT_ID: ${BACKLOG_CLIENT_ID}
+      BACKLOG_CLIENT_SECRET: ${BACKLOG_CLIENT_SECRET}
+      FRONTEND_PUBLIC_URL: ${FRONTEND_PUBLIC_URL:-http://localhost:5174}
+      LOG_FORMAT: ${LOG_FORMAT:-human}
+    ports:
+      - "8004:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
