@@ -35,7 +35,7 @@ go.work
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
 
 # Thumbnails
 ._*
@@ -236,3 +236,7 @@ pyrightconfig.json
 #!! ERROR: zed is undefined. Use list command to see defined gitignore types !!#
 
 # End of https://www.toptal.com/developers/gitignore/api/zed,direnv,go,python,macos,mise
+
+# Superpowers (plans and SDD scratch)
+.superpowers/
+docs/superpowers/

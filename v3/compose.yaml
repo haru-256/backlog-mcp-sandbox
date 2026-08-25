@@ -1,0 +1,50 @@
+name: backlog-mcp-sandbox-v3
+
+services:
+  mcp:
+    build: ./mcp
+    environment:
+      PORT: 3333
+      LOG_FORMAT: ${LOG_FORMAT:-human}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3333/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  api:
+    build: ./backend
+    environment:
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY}
+      OPENCODE_GO_BASE_URL: ${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}
+      OPENCODE_GO_MODEL: ${OPENCODE_GO_MODEL:-deepseek-v4-flash}
+      MCP_SERVER_URL: http://mcp:3333/mcp
+      HOST_PUBLIC_URL: ${HOST_PUBLIC_URL:-http://localhost:8003}
+      BACKLOG_CLIENT_ID: ${BACKLOG_CLIENT_ID}
+      BACKLOG_CLIENT_SECRET: ${BACKLOG_CLIENT_SECRET}
+      FRONTEND_PUBLIC_URL: ${FRONTEND_PUBLIC_URL:-http://localhost:5173}
+      LOG_FORMAT: ${LOG_FORMAT:-human}
+    depends_on:
+      mcp:
+        condition: service_healthy
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

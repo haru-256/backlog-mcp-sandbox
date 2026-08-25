@@ -23,6 +23,7 @@
         <a href="./index.html">共通の地図</a>
         <a href="./v1.html">v1 ステートレス Host</a>
         <a href="./v2.html" aria-current="page">v2 セッションと SSE</a>
+        <a href="./v3.html">v3 自作 MCP</a>
       </nav>
     </div>
   </header>
@@ -859,6 +860,8 @@ for await (const event of readSseEvents(response.body)) {
       同じ「セッション」でも同じ「ストリーム」でもないと区別できる。
       その区別ができれば、認証、利用者ごとの所有権、より厳しい監査、再試行方針を足すときも、
       どの層へ置くべきかを自分で判断できる。
+      Server 側を自分で書き、接続とトークンの置き場を設計し直す話は
+      <a href="./v3.html">v3 学習書</a> にある。v2 は前提にしない。
     </p>
   </main>
 
@@ -867,7 +870,8 @@ for await (const event of readSseEvents(response.body)) {
       backlog-mcp-sandbox 学習ガイド。
       <a href="./index.html">共通の地図</a> ／
       <a href="./v1.html">v1</a> ／
-      <a href="./v2.html">v2</a>
+      <a href="./v2.html">v2</a> ／
+      <a href="./v3.html">v3</a>
     </p>
   </footer>
 
